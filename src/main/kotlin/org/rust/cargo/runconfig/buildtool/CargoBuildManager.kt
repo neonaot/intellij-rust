@@ -43,6 +43,7 @@ import org.rust.cargo.runconfig.CargoCommandRunner
 import org.rust.cargo.runconfig.CargoRunState
 import org.rust.cargo.runconfig.addFormatJsonOption
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.cargo.runconfig.target.localBuildArgsForRemoteRun
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.util.CargoArgsParser.Companion.parseArgs
 import org.rust.ide.experiments.RsExperiments
@@ -68,6 +69,12 @@ object CargoBuildManager {
             return minVersion >= MIN_RUSTC_VERSION
         }
 
+    val CargoCommandConfiguration.isBuildToolWindowEnabled: Boolean
+        get() {
+            if (!project.isBuildToolWindowEnabled) return false
+            return defaultTargetName == null || !buildOnRemoteTarget
+        }
+
     fun build(buildConfiguration: CargoBuildConfiguration): Future<CargoBuildResult> {
         val configuration = buildConfiguration.configuration
         val environment = buildConfiguration.environment
@@ -89,13 +96,15 @@ object CargoBuildManager {
             lastBuildCommandLine = state.prepareCommandLine()
         }
 
-        return execute(CargoBuildContext(
-            cargoProject = cargoProject,
-            environment = environment,
-            taskName = "Build",
-            progressTitle = "Building...",
-            isTestBuild = state.commandLine.command == "test"
-        )) {
+        return execute(
+            CargoBuildContext(
+                cargoProject = cargoProject,
+                environment = environment,
+                taskName = "Build",
+                progressTitle = "Building...",
+                isTestBuild = state.commandLine.command == "test"
+            )
+        ) {
             val buildProgressListener = ServiceManager.getService(project, BuildViewManager::class.java)
             if (!isHeadlessEnvironment) {
                 @Suppress("UsePropertyAccessSyntax")
@@ -211,7 +220,8 @@ object CargoBuildManager {
         val command = args.firstOrNull() ?: return null
         if (command !in BUILDABLE_COMMANDS) return null
         val additionalArguments = args.drop(1)
-        val (commandArguments, _) = parseArgs(command, additionalArguments)
+        val commandArguments = parseArgs(command, additionalArguments).commandArguments.toMutableList()
+        commandArguments.addAll(configuration.localBuildArgsForRemoteRun)
 
         // https://github.com/intellij-rust/intellij-rust/issues/3707
         if (command == "test" && commandArguments.contains("--doc")) return null
@@ -225,6 +235,9 @@ object CargoBuildManager {
         }
         // building does not require root privileges anyway
         buildConfiguration.withSudo = false
+
+        buildConfiguration.defaultTargetName = buildConfiguration.defaultTargetName
+            .takeIf { buildConfiguration.buildOnRemoteTarget }
 
         return buildConfiguration
     }

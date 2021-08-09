@@ -28,6 +28,7 @@ import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.runconfig.*
 import org.rust.cargo.runconfig.buildtool.CargoBuildTaskProvider
+import org.rust.cargo.runconfig.target.CargoCommandConfigurationTargetAware
 import org.rust.cargo.runconfig.test.CargoTestConsoleProperties
 import org.rust.cargo.runconfig.ui.CargoCommandConfigurationEditor
 import org.rust.cargo.toolchain.BacktraceMode
@@ -48,11 +49,11 @@ import java.nio.file.Paths
  * It is basically a bunch of values which are persisted to .xml files inside .idea,
  * or displayed in the GUI form. It has to be mutable to satisfy various IDE's APIs.
  */
-open class CargoCommandConfiguration(
+class CargoCommandConfiguration(
     project: Project,
     name: String,
     factory: ConfigurationFactory
-) : RsCommandConfiguration(project, name, factory),
+) : CargoCommandConfigurationTargetAware(project, name, factory),
     InputRedirectAware.InputRedirectOptions, ConsolePropertiesProvider {
     override var command: String = "run"
     var channel: RustChannel = RustChannel.DEFAULT
@@ -60,6 +61,7 @@ open class CargoCommandConfiguration(
     var allFeatures: Boolean = false
     var emulateTerminal: Boolean = false
     var withSudo: Boolean = false
+    var buildOnRemoteTarget: Boolean = true
     var backtrace: BacktraceMode = BacktraceMode.SHORT
     var env: EnvironmentVariablesData = EnvironmentVariablesData.DEFAULT
 
@@ -94,6 +96,7 @@ open class CargoCommandConfiguration(
         element.writeBool("allFeatures", allFeatures)
         element.writeBool("emulateTerminal", emulateTerminal)
         element.writeBool("withSudo", withSudo)
+        element.writeBool("buildOnRemoteTarget", buildOnRemoteTarget)
         element.writeEnum("backtrace", backtrace)
         env.writeExternal(element)
         element.writeBool("isRedirectInput", isRedirectInput)
@@ -111,6 +114,7 @@ open class CargoCommandConfiguration(
         element.readBool("allFeatures")?.let { allFeatures = it }
         element.readBool("emulateTerminal")?.let { emulateTerminal = it }
         element.readBool("withSudo")?.let { withSudo = it }
+        element.readBool("buildOnRemoteTarget")?.let { buildOnRemoteTarget = it }
         element.readEnum<BacktraceMode>("backtrace")?.let { backtrace = it }
         env = EnvironmentVariablesData.readExternal(element)
         element.readBool("isRedirectInput")?.let { isRedirectInput = it }
@@ -170,15 +174,15 @@ open class CargoCommandConfiguration(
         }
     }
 
-    private fun showTestToolWindow(): Boolean = command.startsWith("test") &&
-        isFeatureEnabled(RsExperiments.TEST_TOOL_WINDOW) &&
-        !Cargo.TEST_NOCAPTURE_ENABLED_KEY.asBoolean() &&
-        !command.contains("--nocapture")
-
+    private fun showTestToolWindow(): Boolean {
+        if (!isFeatureEnabled(RsExperiments.TEST_TOOL_WINDOW)) return false
+        if (!command.startsWith("test") || command.contains("--nocapture")) return false
+        if (Cargo.TEST_NOCAPTURE_ENABLED_KEY.asBoolean()) return false
+        return defaultTargetName == null
+    }
 
     override fun createTestConsoleProperties(executor: Executor): SMTRunnerConsoleProperties? =
         if (showTestToolWindow()) CargoTestConsoleProperties(this, executor) else null
-
 
     sealed class CleanConfiguration {
         class Ok(

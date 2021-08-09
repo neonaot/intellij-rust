@@ -3,5 +3,8 @@
         <!--suppress PluginXmlValidity -->
         <formattingService implementation="org.rust.ide.formatter.RustfmtFormattingService"/>
         <postFormatProcessor implementation="org.rust.ide.formatter.processors.RsTrailingCommaFormatProcessor"/>
+        <executionTargetLanguageRuntimeType implementation="org.rust.cargo.runconfig.target.RsLanguageRuntimeType"/>
+        <programRunner implementation="org.rust.cargo.runconfig.target.RsLocalBuildForTargetRunner"/>
+        <programRunner implementation="org.rust.cargo.runconfig.target.RsLocalBuildForTargetRunnerLegacy"/>
     </extensions>
 </idea-plugin>

@@ -45,6 +45,7 @@ val javaIdePlugin = "com.intellij.java.ide"
 val javaScriptPlugin = "JavaScript"
 val clionPlugins = listOf("com.intellij.cidr.base", "com.intellij.clion")
 val mlCompletionPlugin = "com.intellij.completion.ml.ranking"
+val dockerPlugin = "Docker"
 
 val compileNativeCodeTaskName = "compileNativeCode"
 
@@ -249,6 +250,9 @@ project(":plugin") {
                 javaPlugin,
                 nativeDebugPlugin
             )
+            if (platformVersion > 211) {
+                pluginList += dockerPlugin
+            }
         }
         plugins.set(pluginList)
     }

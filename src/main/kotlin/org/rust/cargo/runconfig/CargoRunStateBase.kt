@@ -11,6 +11,7 @@ import com.intellij.execution.process.ProcessTerminatedListener
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.project.Project
 import org.rust.cargo.project.model.CargoProject
 import org.rust.cargo.runconfig.buildtool.CargoPatch
 import org.rust.cargo.runconfig.buildtool.cargoPatches
@@ -29,10 +30,11 @@ abstract class CargoRunStateBase(
     val runConfiguration: CargoCommandConfiguration,
     val config: CargoCommandConfiguration.CleanConfiguration.Ok
 ) : CommandLineState(environment) {
+    val project: Project = environment.project
     val toolchain: RsToolchainBase = config.toolchain
     val commandLine: CargoCommandLine = config.cmd
     val cargoProject: CargoProject? = CargoCommandConfiguration.findCargoProject(
-        environment.project,
+        project,
         commandLine.additionalArguments,
         commandLine.workingDirectory
     )
@@ -64,7 +66,7 @@ abstract class CargoRunStateBase(
     /**
      * @param processColors if true, process ANSI escape sequences, otherwise keep escape codes in the output
      */
-    fun startProcess(processColors: Boolean): ProcessHandler {
+    open fun startProcess(processColors: Boolean): ProcessHandler {
         val commandLine = cargo().toColoredCommandLine(environment.project, prepareCommandLine())
         LOG.debug("Executing Cargo command: `${commandLine.commandLineString}`")
         val handler = RsProcessHandler(commandLine, processColors)
