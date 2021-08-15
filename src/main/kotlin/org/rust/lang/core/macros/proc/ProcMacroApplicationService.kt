@@ -8,6 +8,7 @@ package org.rust.lang.core.macros.proc
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.project.Project
 import org.rust.ide.experiments.RsExperiments
 import org.rust.openapiext.isFeatureEnabled
 
@@ -17,12 +18,12 @@ class ProcMacroApplicationService : Disposable {
     private var sharedServer: ProcMacroServerPool? = null
 
     @Synchronized
-    fun getServer(): ProcMacroServerPool? {
+    fun getServer(project: Project): ProcMacroServerPool? {
         if (!isEnabled()) return null
 
         var server = sharedServer
         if (server == null) {
-            server = ProcMacroServerPool.tryCreate(this)
+            server = ProcMacroServerPool.tryCreate(project, this)
             sharedServer = server
         }
         return server

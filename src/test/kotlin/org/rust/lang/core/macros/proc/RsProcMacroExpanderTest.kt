@@ -9,6 +9,8 @@ import com.intellij.util.ThrowableRunnable
 import com.intellij.util.io.exists
 import org.rust.*
 import org.rust.cargo.project.model.cargoProjects
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.ide.experiments.RsExperiments
 import org.rust.lang.core.macros.errors.ProcMacroExpansionError
 import org.rust.lang.core.macros.tt.TokenTree
@@ -30,7 +32,7 @@ class RsProcMacroExpanderTest : RsTestBase() {
             .find { it.name == WithProcMacros.TEST_PROC_MACROS }!!
         val lib = pkg.procMacroArtifact?.path?.toString()
             ?: error("Procedural macro artifact is not found. This most likely means a compilation failure")
-        val server = ProcMacroServerPool.tryCreate(testRootDisposable)
+        val server = ProcMacroServerPool.tryCreate(project, testRootDisposable)
             ?: error("native-helper is not available")
         val expander = ProcMacroExpander(project, server)
 
@@ -117,7 +119,8 @@ class RsProcMacroExpanderTest : RsTestBase() {
     }
 
     override fun runTestRunnable(testRunnable: ThrowableRunnable<Throwable>) {
-        if (RsPathManager.nativeHelper() == null && System.getenv("CI") == null) {
+        if (RsPathManager.nativeHelper(project.toolchain is RsWslToolchain) == null &&
+            System.getenv("CI") == null) {
             System.err.println("SKIP \"$name\": no native-helper executable")
             return
         }

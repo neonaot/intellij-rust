@@ -17,9 +17,12 @@ import com.intellij.execution.process.ProcessIOExecutorService
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.debug
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapiext.isUnitTestMode
 import com.intellij.util.concurrency.AppExecutorUtil
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.lang.core.macros.MACRO_LOG
 import org.rust.lang.core.macros.tt.TokenTree
 import org.rust.lang.core.macros.tt.TokenTreeJsonDeserializer
@@ -57,8 +60,8 @@ class ProcMacroServerPool private constructor(
     }
 
     companion object {
-        fun tryCreate(parentDisposable: Disposable): ProcMacroServerPool? {
-            val expanderExecutable = RsPathManager.nativeHelper()
+        fun tryCreate(project: Project, parentDisposable: Disposable): ProcMacroServerPool? {
+            val expanderExecutable = RsPathManager.nativeHelper(project.toolchain is RsWslToolchain)
             if (expanderExecutable == null || !expanderExecutable.isExecutable()) {
                 return null
             }

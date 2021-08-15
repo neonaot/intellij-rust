@@ -25,7 +25,7 @@ import java.util.concurrent.TimeoutException
 
 class ProcMacroExpander(
     private val project: Project,
-    private val server: ProcMacroServerPool? = ProcMacroApplicationService.getInstance().getServer(),
+    private val server: ProcMacroServerPool? = ProcMacroApplicationService.getInstance().getServer(project),
     private val timeout: Long = Registry.get("org.rust.macros.proc.timeout").asInteger().toLong(),
 ) : MacroExpander<RsProcMacroData, ProcMacroExpansionError>() {
     private val isEnabled: Boolean = if (server != null) true else ProcMacroApplicationService.isEnabled()
