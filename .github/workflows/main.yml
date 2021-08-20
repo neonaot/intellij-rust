@@ -1,4 +1,4 @@
-name: Notify users based on issue labels
+name: Notify users based on labels
 on:
   issues:
       types: [labeled]
@@ -8,7 +8,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-        - uses: jenschelkopf/issue-label-notification-action@1.3
+        - uses: bugobliterator/issue-label-notification-action@master
           with:
              recipients: |
                   help wanted=@neonaot
