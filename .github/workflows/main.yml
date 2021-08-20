@@ -8,7 +8,7 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-        - uses: bugobliterator/issue-label-notification-action@master
+        - uses: bugobliterator/issue-label-notification-action@pr-pr-notify
           with:
              recipients: |
                   help wanted=@neonaot
