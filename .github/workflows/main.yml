@@ -14,4 +14,4 @@ jobs:
                   help wanted=@neonaot @neonaot
                   documentation=@neonaot
              message: |
-                  Hi! {receipients} look here, there is label {label}!
+                  Hi! {recipients} look here, there is label {label}!
