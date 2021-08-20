@@ -8,10 +8,10 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-        - uses: bugobliterator/issue-label-notification-action@pr-pr-notify
+        - uses: neonaot/issue-label-notification-action@pr-pr-notify
           with:
              recipients: |
-                  help wanted=@neonaot @neonaot
+                  help wanted=@neonaot
                   documentation=@neonaot
              message: |
-                  Hi! {recipients} look here, there is label {label}!
+                  Hi! {recipients}, look here, there is label "{label}"!
