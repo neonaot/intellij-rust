@@ -1,9 +1,7 @@
 name: Notify users based on labels
 on:
-  issues:
-      types: [labeled]
   pull_request:
-      types: [closed]
+      types: [labeled]
 jobs:
   notify:
     runs-on: ubuntu-latest
