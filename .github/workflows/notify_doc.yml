@@ -23,4 +23,5 @@ jobs:
                   run: pip install PyGithub
 
                 - name: execute py script
-                  run: python scripts/notifier.py --token ${{ secrets.MY_TOKEN }} --action labeling --pr_id 13 --label TODO
+                  run: python scripts/notifier.py --token ${{ notifier.MY_TOKEN }} --event labeling --pr_id 13 --label TODO
+                  #uses:  ${{ notifier.MY_TOKEN }}
