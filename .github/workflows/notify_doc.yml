@@ -1,0 +1,26 @@
+name: notifier for docteam
+
+on:
+    pull_request:
+        types: [labeled]
+
+jobs:
+        build:
+            runs-on: ubuntu-latest
+
+            steps:
+                - name: checkout repo content
+                  uses: actions/checkout@v2
+
+                - name: setup python
+                  uses: actions/setup-python@v2
+                  with:
+                      python-version: 3.9
+
+                - name: Install python packages 1 #TODO
+                  run: pip install argparse
+                - name: Install python packages 2
+                  run: pip install github
+
+                - name: execute py script
+                  run: python scripts/notifier.py --token ${{ notifier.MY_TOKEN }} --action labeling --pr_id 13 --label TODO
