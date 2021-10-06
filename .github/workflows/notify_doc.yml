@@ -20,7 +20,7 @@ jobs:
                 - name: Install python packages 1 #TODO
                   run: pip install argparse
                 - name: Install python packages 2
-                  run: pip install github
+                  run: pip install PyGithub
 
                 - name: execute py script
                   run: python scripts/notifier.py --token ${{ secrets.MY_TOKEN }} --action labeling --pr_id 13 --label TODO
