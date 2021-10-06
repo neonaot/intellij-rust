@@ -89,8 +89,9 @@ open class RsPsiRenderer(
             sb.append("extern ")
             val abiName = fn.abiName
             if (abiName != null) {
+                sb.append("\"")
                 sb.append(abiName)
-                sb.append(" ")
+                sb.append("\" ")
             }
         }
         sb.append("fn ")
@@ -176,6 +177,7 @@ open class RsPsiRenderer(
                     sb.append(name ?: "_")
                     val type = typeReference
                     if (type != null) {
+                        sb.append(": ")
                         appendTypeReference(sb, type)
                     }
                 }
@@ -295,8 +297,9 @@ open class RsPsiRenderer(
                     sb.append("extern ")
                     val abiName = type.abiName
                     if (abiName != null) {
+                        sb.append("\"")
                         sb.append(abiName)
-                        sb.append(" ")
+                        sb.append("\" ")
                     }
                 }
                 sb.append("fn")

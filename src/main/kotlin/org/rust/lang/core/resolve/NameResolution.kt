@@ -13,9 +13,6 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.io.FileUtil
-import com.intellij.openapiext.Testmark
-import com.intellij.openapiext.hitOnFalse
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
@@ -50,6 +47,7 @@ import org.rust.lang.core.resolve.indexes.RsLangItemIndex
 import org.rust.lang.core.resolve.indexes.RsMacroIndex
 import org.rust.lang.core.resolve.ref.*
 import org.rust.lang.core.resolve2.*
+import org.rust.lang.core.resolve2.RsModInfoBase.RsModInfo
 import org.rust.lang.core.stubs.index.RsNamedElementIndex
 import org.rust.lang.core.types.*
 import org.rust.lang.core.types.consts.CtInferVar
@@ -57,8 +55,7 @@ import org.rust.lang.core.types.infer.foldCtConstParameterWith
 import org.rust.lang.core.types.infer.foldTyTypeParameterWith
 import org.rust.lang.core.types.infer.substitute
 import org.rust.lang.core.types.ty.*
-import org.rust.openapiext.testAssert
-import org.rust.openapiext.toPsiFile
+import org.rust.openapiext.*
 import org.rust.stdext.buildList
 import org.rust.stdext.intersects
 
@@ -865,7 +862,7 @@ fun processMacroCallPathResolveVariants(path: RsPath, isCompletion: Boolean, pro
                     ?.resolveToMacroAndProcessLocalInnerMacros(processor) {
                         /* this code will be executed if new resolve can't be used */
                         val def = expandedFrom.resolveToMacro() ?: return@resolveToMacroAndProcessLocalInnerMacros null
-                        if (!def.hasMacroExportLocalInnerMacros) return@resolveToMacroAndProcessLocalInnerMacros null
+                        if (def !is RsMacro || !def.hasMacroExportLocalInnerMacros) return@resolveToMacroAndProcessLocalInnerMacros null
                         val crateRoot = def.crateRoot as? RsFile ?: return@resolveToMacroAndProcessLocalInnerMacros false
                         processAll(exportedMacros(crateRoot), processor)
                     }
@@ -1694,7 +1691,10 @@ inline fun processWithShadowing(
     return f(processor)
 }
 
-fun findPrelude(element: RsElement): RsFile? {
+fun findPrelude(element: RsElement): RsMod? {
+    findPreludeUsingNewResolve(element)?.let { return it }
+
+    // TODO: Always use new resolve to find prelude
     val crateRoot = element.crateRoot as? RsFile ?: return null
     val cargoPackage = crateRoot.containingCargoPackage
     val isStdlib = cargoPackage?.origin == PackageOrigin.STDLIB && !element.isDoctestInjection
@@ -1713,6 +1713,12 @@ fun findPrelude(element: RsElement): RsFile? {
         ?.findFileByRelativePath("../prelude/v1.rs")
         ?.toPsiFile(element.project)
         ?.rustFile
+}
+
+private fun findPreludeUsingNewResolve(element: RsElement): RsMod? {
+    val info = getModInfo(element.containingMod) as? RsModInfo ?: return null
+    val prelude = info.defMap.prelude ?: return null
+    return prelude.toRsMod(element.project).singleOrNull()
 }
 
 // Implicit extern crate from stdlib

@@ -27,12 +27,8 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.util.text.StringUtil
-import com.intellij.openapi.wm.ToolWindowId
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapiext.isHeadlessEnvironment
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.ui.SystemNotifications
-import com.intellij.ui.content.MessageView
 import com.intellij.util.concurrency.FutureResult
 import com.intellij.util.execution.ParametersListUtil
 import com.intellij.util.text.SemVer
@@ -50,6 +46,8 @@ import org.rust.cargo.util.CargoArgsParser.Companion.parseArgs
 import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.notifications.RsNotifications
 import org.rust.openapiext.isFeatureEnabled
+import org.rust.openapiext.isHeadlessEnvironment
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.saveAllDocuments
 import java.util.concurrent.Future
 
@@ -94,21 +92,23 @@ object CargoBuildManager {
         val cargoProject = state.cargoProject ?: return CANCELED_BUILD_RESULT
 
         // Make sure build tool window is initialized:
-        ServiceManager.getService(project, BuildContentManager::class.java)
+        @Suppress("UsePropertyAccessSyntax")
+        BuildContentManager.getInstance(project).getOrCreateToolWindow()
 
         if (isUnitTestMode) {
             lastBuildCommandLine = state.prepareCommandLine()
         }
 
-        return execute(
-            CargoBuildContext(
-                cargoProject = cargoProject,
-                environment = environment,
-                taskName = "Build",
-                progressTitle = "Building...",
-                isTestBuild = state.commandLine.command == "test"
-            )
-        ) {
+        val buildId = Any()
+        return execute(CargoBuildContext(
+            cargoProject = cargoProject,
+            environment = environment,
+            taskName = "Build",
+            progressTitle = "Building...",
+            isTestBuild = state.commandLine.command == "test",
+            buildId = buildId,
+            parentId = buildId
+        )) {
             val buildProgressListener = ServiceManager.getService(project, BuildViewManager::class.java)
             if (!isHeadlessEnvironment) {
                 @Suppress("UsePropertyAccessSyntax")
@@ -194,7 +194,6 @@ object CargoBuildManager {
                         return@Runnable
                     }
 
-                    MessageView.SERVICE.getInstance(context.project) // register ToolWindowId.MESSAGES_WINDOW
                     saveAllDocuments()
                     context.doExecute()
                 }
@@ -270,10 +269,9 @@ object CargoBuildManager {
         notification.notify(project)
 
         if (messageType === MessageType.ERROR) {
-            MessageView.SERVICE.getInstance(project) // register ToolWindowId.MESSAGES_WINDOW
             val manager = ToolWindowManager.getInstance(project)
             invokeLater {
-                manager.notifyByBalloon(ToolWindowId.MESSAGES_WINDOW, messageType, notificationContent)
+                manager.notifyByBalloon(BuildContentManager.TOOL_WINDOW_ID, messageType, notificationContent)
             }
         }
 

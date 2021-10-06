@@ -20,7 +20,8 @@ class DefMapsBuilder(
     private val crates: List<Crate>,  // should be top sorted
     defMaps: Map<Crate, CrateDefMap>,
     private val indicator: ProgressIndicator,
-    private val pool: Executor,
+    private val pool: ExecutorService?,
+    private val poolForMacros: ExecutorService?,
 ) {
 
     init {
@@ -48,10 +49,12 @@ class DefMapsBuilder(
 
     fun build() {
         val wallTime = measureTimeMillis {
-            if (pool is SameThreadExecutor) {
-                buildSync()
-            } else {
+            if (pool != null) {
                 buildAsync()
+            } else {
+                invokeOnPoolThread(pool ?: poolForMacros, indicator) {
+                    buildSync()
+                }
             }
         }
 
@@ -78,6 +81,7 @@ class DefMapsBuilder(
     }
 
     private fun buildDefMapAsync(crate: Crate) {
+        check(pool != null)
         pool.execute {
             try {
                 check(crate !in tasksTimes)
@@ -103,7 +107,7 @@ class DefMapsBuilder(
                 it to dependencyDefMap
             }
             .toMap(hashMapOf())
-        val defMap = buildDefMap(crate, allDependenciesDefMaps)
+        val defMap = buildDefMap(crate, allDependenciesDefMaps, poolForMacros, indicator)
         defMapService.setDefMap(crateId, defMap)
         if (defMap != null) {
             builtDefMaps[crate] = defMap
@@ -134,13 +138,34 @@ class DefMapsBuilder(
             .sortedByDescending { (_, time) -> time }
             .take(5)
             .joinToString { (crate, time) -> "$crate ${time}ms" }
-        val multithread = pool !is SameThreadExecutor
+        val multithread = pool != null
         if (multithread) {
-            RESOLVE_LOG.debug("wallTime: $wallTime, totalTime: $totalTime, " +
-                "parallelism coefficient: ${"%.2f".format((totalTime.toDouble() / wallTime))}.    " +
-                "Top 5 crates: $top5crates")
+            RESOLVE_LOG.debug(
+                "wallTime: $wallTime, totalTime: $totalTime, " +
+                    "parallelism coefficient: ${"%.2f".format((totalTime.toDouble() / wallTime))}.    " +
+                    "Top 5 crates: $top5crates"
+            )
         } else {
             RESOLVE_LOG.debug("wallTime: $wallTime.    Top 5 crates: $top5crates")
         }
+    }
+}
+
+/**
+ * Needed because of [DefCollector.expandMacrosInParallel].
+ * We use [ForkJoinPool.invokeAll] there, which can execute tasks
+ * from completely different thread pool (associated with current thread).
+ * That's why we need to be sure that we build DefMaps on "fresh" thread.
+ * Also see [org.rust.lang.core.macros.MacroExpansionServiceImplInner.pool].
+ */
+private fun invokeOnPoolThread(pool: ExecutorService?, indicator: ProgressIndicator, action: () -> Unit) {
+    if (pool == null) {
+        action()
+    } else {
+        pool.submit {
+            computeInReadActionWithWriteActionPriority(SensitiveProgressWrapper(indicator)) {
+                action()
+            }
+        }.getWithRethrow()
     }
 }

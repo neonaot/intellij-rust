@@ -10,6 +10,7 @@ import org.rust.*
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.ide.inspections.lints.RsUnusedImportInspection
 
+@UseNewResolve  // because of RsUnusedImportInspection
 @WithEnabledInspections(RsUnusedImportInspection::class)
 class RsImportOptimizerTest: RsTestBase() {
 
@@ -477,7 +478,11 @@ class RsImportOptimizerTest: RsTestBase() {
             pub mod bbb {
                 pub mod ccc {}
             }
+
+            fn usage(p1: ccc::S, p2: io::S) {}
         }
+
+        fn usage(p1: ccc::S, p2: mem::S, p3: string:S, p4: io::S) {}
     """, """
         use std::{io, mem, string};
 
@@ -503,7 +508,11 @@ class RsImportOptimizerTest: RsTestBase() {
             pub mod bbb {
                 pub mod ccc {}
             }
+
+            fn usage(p1: ccc::S, p2: io::S) {}
         }
+
+        fn usage(p1: ccc::S, p2: mem::S, p3: string:S, p4: io::S) {}
     """)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
@@ -519,6 +528,8 @@ class RsImportOptimizerTest: RsTestBase() {
 
 
         mod ccc {}
+
+        fn usage(p1: bbb::S, p2: mem::S, p3: string:S, p4: io::S) {}
     """, """
         use std::{io, mem, string};
 
@@ -531,6 +542,8 @@ class RsImportOptimizerTest: RsTestBase() {
         }
 
         mod ccc {}
+
+        fn usage(p1: bbb::S, p2: mem::S, p3: string:S, p4: io::S) {}
     """)
 
     @UseNewResolve

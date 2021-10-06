@@ -36,9 +36,7 @@ import org.rust.ide.presentation.shortPresentableText
 import org.rust.ide.refactoring.implementMembers.ImplementMembersFix
 import org.rust.ide.utils.checkMatch.Pattern
 import org.rust.ide.utils.import.RsImportHelper.getTypeReferencesInfoFromTys
-import org.rust.lang.core.CONST_GENERICS
-import org.rust.lang.core.CompilerFeature
-import org.rust.lang.core.MIN_CONST_GENERICS
+import org.rust.lang.core.*
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.ImplLookup
@@ -130,7 +128,7 @@ sealed class RsDiagnostic(
                         add(ConvertToOwnedTyFix(element, expectedTy))
                     }
                     val stringTy = items.String.asTy()
-                    if (expectedTy == stringTy
+                    if (expectedTy.isEquivalentTo(stringTy)
                         && (isToStringImplForActual(items, lookup) || isActualTyNumeric())) {
                         add(ConvertToStringFix(element))
                     } else if (expectedTy is TyReference) {
@@ -157,17 +155,17 @@ sealed class RsDiagnostic(
                         }
                     } else if (expectedTy is TyAdt && expectedTy.item == items.Result) {
                         val (expOkTy, expErrTy) = expectedTy.typeArguments
-                        if (expErrTy == errTyOfTryFromActualImplForTy(expOkTy, items, lookup)) {
+                        if (expErrTy.isEquivalentTo(errTyOfTryFromActualImplForTy(expOkTy, items, lookup))) {
                             add(ConvertToTyUsingTryFromTraitFix(element, expOkTy))
                         }
-                        if (expErrTy == ifActualIsStrGetErrTyOfFromStrImplForTy(expOkTy, items, lookup)) {
+                        if (expErrTy.isEquivalentTo(ifActualIsStrGetErrTyOfFromStrImplForTy(expOkTy, items, lookup))) {
                             add(ConvertToTyUsingFromStrFix(element, expOkTy))
                         }
                     }
-                    if (actualTy == stringTy) {
-                        if (expectedTy == REF_STR_TY) {
+                    if (actualTy.isEquivalentTo(stringTy)) {
+                        if (expectedTy.isEquivalentTo(REF_STR_TY)) {
                             add(ConvertToImmutableStrFix(element))
-                        } else if (expectedTy == MUT_REF_STR_TY) {
+                        } else if (expectedTy.isEquivalentTo(MUT_REF_STR_TY)) {
                             add(ConvertToMutStrFix(element))
                         }
                     }
@@ -197,16 +195,20 @@ sealed class RsDiagnostic(
         private fun ifActualIsStrGetErrTyOfFromStrImplForTy(ty: Ty, items: KnownItems, lookup: ImplLookup): Ty? {
             if (lookup.coercionSequence(actualTy).lastOrNull() !is TyStr) return null
             val fromStr = items.FromStr ?: return null
-            val result = lookup.selectProjectionStrict(TraitRef(ty, BoundElement(fromStr)),
-                fromStr.findAssociatedType("Err") ?: return null)
+            val result = lookup.selectProjectionStrict(
+                TraitRef(ty, BoundElement(fromStr)),
+                fromStr.findAssociatedType("Err") ?: return null
+            )
             return result.ok()?.value
         }
 
         private fun isToOwnedImplWithExpectedForActual(items: KnownItems, lookup: ImplLookup): Boolean {
             val toOwnedTrait = items.ToOwned ?: return false
-            val result = lookup.selectProjectionStrictWithDeref(TraitRef(actualTy, BoundElement(toOwnedTrait)),
-                toOwnedTrait.findAssociatedType("Owned") ?: return false)
-            return expectedTy == result.ok()?.value
+            val result = lookup.selectProjectionStrictWithDeref(
+                TraitRef(actualTy, BoundElement(toOwnedTrait)),
+                toOwnedTrait.findAssociatedType("Owned") ?: return false
+            )
+            return expectedTy.isEquivalentTo(result.ok()?.value)
         }
 
         private fun isToStringImplForActual(items: KnownItems, lookup: ImplLookup): Boolean {
@@ -1316,8 +1318,9 @@ sealed class RsDiagnostic(
         )
     }
 
-    class ReprAttrUnsupportedItem(element: PsiElement,
-                                  private val errorText: String
+    class ReprAttrUnsupportedItem(
+        element: PsiElement,
+        private val errorText: String
     ) : RsDiagnostic(element) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
@@ -1327,8 +1330,9 @@ sealed class RsDiagnostic(
         )
     }
 
-    class UnrecognizedReprAttribute(element: PsiElement,
-                                    private val reprName: String
+    class UnrecognizedReprAttribute(
+        element: PsiElement,
+        private val reprName: String
     ) : RsDiagnostic(element) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
@@ -1351,15 +1355,11 @@ sealed class RsDiagnostic(
         )
     }
 
-    class ForbiddenConstGenericType(
-        private val typeReference: RsTypeReference
-    ) : RsDiagnostic(typeReference) {
+    class DefaultsConstGenericNotAllowed(expr: RsExpr) : RsDiagnostic(expr) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
             null,
-            "the only supported types are integers, `bool` and `char`",
-            "`${typeReference.text}` is forbidden as the type of a const generic parameter",
-            fixes = listOf(createAddOrReplaceFeatureFix(typeReference, CONST_GENERICS, MIN_CONST_GENERICS))
+            "Defaults for const parameters are only allowed in `struct`, `enum`, `type`, or `trait` definitions",
         )
     }
 
@@ -1391,6 +1391,35 @@ sealed class RsDiagnostic(
             fixes = fixes
         )
     }
+
+    class InvalidAbi(
+        element: RsLitExpr,
+        private val abiName: String
+    ) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0703,
+            "Invalid ABI: found $abiName",
+            description = "valid ABIs: ${SUPPORTED_CALLING_CONVENTIONS.keys.joinToString(", ")}",
+            fixes = createSuggestionFixes()
+        )
+
+        private fun createSuggestionFixes(): List<NameSuggestionFix<PsiElement>> {
+            val factory = RsPsiFactory(element.project)
+            return NameSuggestionFix.createApplicable(element, abiName, SUPPORTED_CALLING_CONVENTIONS.keys.toList(), 2) {
+                factory.createExpression("\"$it\"")
+            }
+        }
+    }
+
+    class InvalidConstGenericArgument(expr: RsExpr) : RsDiagnostic(expr) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            null,
+            "Expressions must be enclosed in braces to be used as const generic arguments",
+            fixes = listOf(EncloseExprInBracesFix(element as RsExpr))
+        )
+    }
 }
 
 enum class RsErrorCode {
@@ -1401,7 +1430,7 @@ enum class RsErrorCode {
     E0403, E0404, E0407, E0415, E0416, E0424, E0426, E0428, E0433, E0435, E0449, E0451, E0463,
     E0517, E0518, E0537, E0552, E0562, E0569, E0583, E0586, E0594,
     E0601, E0603, E0614, E0616, E0618, E0624, E0658, E0666, E0667, E0688, E0695,
-    E0704, E0732;
+    E0703, E0704, E0732;
 
     val code: String
         get() = toString()
@@ -1485,9 +1514,8 @@ fun RsDiagnostic.addToHolder(holder: RsProblemsHolder) {
     holder.registerProblem(descriptor)
 }
 
-private val PreparedAnnotation.fullDescription: String get() {
-    return "<html>${htmlHeader(errorCode, escapeString(header))}<br>${escapeString(description)}</html>"
-}
+private val PreparedAnnotation.fullDescription: String
+    get() = "<html>${htmlHeader(errorCode, escapeString(header))}<br>${escapeString(description)}</html>"
 
 private fun Severity.toProblemHighlightType(): ProblemHighlightType = when (this) {
     INFO -> ProblemHighlightType.INFORMATION
@@ -1551,4 +1579,36 @@ private fun createAddOrReplaceFeatureFix(element: RsElement, newFix: CompilerFea
         }
     }
 }
+
+val SUPPORTED_CALLING_CONVENTIONS = mapOf(
+    "Rust" to null,
+    "C" to null,
+    "C-unwind" to C_UNWIND,
+    "cdecl" to null,
+    "stdcall" to null,
+    "stdcall-unwind" to C_UNWIND,
+    "fastcall" to null,
+    "vectorcall" to ABI_VECTORCALL,
+    "thiscall" to ABI_THISCALL,
+    "thiscall-unwind" to C_UNWIND,
+    "aapcs" to null,
+    "win64" to null,
+    "sysv64" to null,
+    "ptx-kernel" to ABI_PTX,
+    "msp430-interrupt" to ABI_MSP430_INTERRUPT,
+    "x86-interrupt" to ABI_X86_INTERRUPT,
+    "amdgpu-kernel" to ABI_AMDGPU_KERNEL,
+    "efiapi" to ABI_EFIAPI,
+    "avr-interrupt" to ABI_AVR_INTERRUPT,
+    "avr-non-blocking-interrupt" to ABI_AVR_INTERRUPT,
+    "C-cmse-nonsecure-call" to ABI_C_CMSE_NONSECURE_CALL,
+    // TODO: update compiler features and use `WASM_ABI` here
+    "wasm" to null,
+    "system" to null,
+    "system-unwind" to C_UNWIND,
+    "rust-intrinsic" to INTRINSICS,
+    "rust-call" to UNBOXED_CLOSURES,
+    "platform-intrinsic" to PLATFORM_INTRINSICS,
+    "unadjusted" to ABI_UNADJUSTED
+)
 

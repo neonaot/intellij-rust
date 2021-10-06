@@ -7,6 +7,11 @@ on:
             - staging
             - trying
     pull_request:
+    # Trigger workflow every day to create/update caches for other builds
+    # See https://docs.github.com/en/actions/guides/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache
+    # to get more details about cache access
+    schedule:
+        -   cron: '0 3 * * *'
 
 # Allow cancelling all previous runs for the same branch
 # See https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency
@@ -55,11 +60,14 @@ jobs:
     build-native-code:
         needs: [ calculate-git-info ]
         # `fromJSON` is used here to convert string output to boolean
-        if: ${{ !(fromJSON(needs.calculate-git-info.outputs.is_master_branch) && fromJSON(needs.calculate-git-info.outputs.checked)) }}
+        # We always want to trigger all workflow jobs on `schedule` event because it creates/updates caches for other builds.
+        # See https://docs.github.com/en/actions/guides/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache
+        # to get more details about cache access
+        if: ${{ github.event_name == 'schedule' || !fromJSON(needs.calculate-git-info.outputs.is_master_branch) || !fromJSON(needs.calculate-git-info.outputs.checked) }}
         strategy:
             fail-fast: true
             matrix:
-                rust-version: [ 1.54.0 ]
+                rust-version: [ 1.55.0 ]
                 config:
                     - name: linux
                       arch: x86-64
@@ -124,9 +132,9 @@ jobs:
             fail-fast: ${{ fromJSON(needs.calculate-git-info.outputs.is_bors_branch) }}
             matrix:
                 os: [ ubuntu-18.04, windows-latest ]
-                rust-version: [ 1.54.0, nightly-2021-03-24 ]
+                rust-version: [ 1.55.0, nightly-2021-08-17 ]
                 base-ide: [ idea, clion ]
-                platform-version: [ 211, 212 ]
+                platform-version: [ 212, 213 ]
                 resolve-engine: [ resolve-new ]
                 # it's enough to verify plugin structure only once per platform version
                 verify-plugin: [ false ]
@@ -135,11 +143,11 @@ jobs:
                       # Don't forget to update condition in `Set up additional env variables` step
                       rust-version: 1.41.0
                       base-ide: idea
-                      platform-version: 211
+                      platform-version: 212
                       resolve-engine: resolve-old
                       verify-plugin: true
                     - os: ubuntu-18.04
-                      rust-version: 1.54.0
+                      rust-version: 1.55.0
                       base-ide: idea
                       platform-version: 212
                       resolve-engine: resolve-old
@@ -205,12 +213,10 @@ jobs:
             - name: Set up additional env variables
               if: matrix.rust-version == '1.41.0'
               # see https://help.github.com/en/actions/reference/workflow-commands-for-github-actions#setting-an-environment-variable
-              # BACKCOMPAT: 1.45.0. Don't redefine `compileNativeCode` property
               run: |
-                  echo "ORG_GRADLE_PROJECT_ideaVersion=IU-2021.1.1" >> $GITHUB_ENV
-                  echo "ORG_GRADLE_PROJECT_clionVersion=CL-2021.1.1" >> $GITHUB_ENV
-                  echo "ORG_GRADLE_PROJECT_nativeDebugPluginVersion=211.7142.13" >> $GITHUB_ENV
-                  echo "ORG_GRADLE_PROJECT_graziePluginVersion=211.7142.14" >> $GITHUB_ENV
+                  echo "ORG_GRADLE_PROJECT_ideaVersion=IU-2021.2" >> $GITHUB_ENV
+                  echo "ORG_GRADLE_PROJECT_clionVersion=CL-2021.2" >> $GITHUB_ENV
+                  echo "ORG_GRADLE_PROJECT_nativeDebugPluginVersion=212.4746.2" >> $GITHUB_ENV
 
             - name: Set up env variable for old resolve
               if: matrix.resolve-engine == 'resolve-old'
@@ -253,17 +259,17 @@ jobs:
                   path: bin/macos/arm64
 
             - name: Download
-              uses: eskatos/gradle-command-action@v1
+              uses: gradle/gradle-build-action@v1
               with:
                   arguments: ":resolveDependencies -Pkotlin.incremental=false --no-daemon"
 
             - name: Build
-              uses: eskatos/gradle-command-action@v1
+              uses: gradle/gradle-build-action@v1
               with:
                   arguments: "assemble testClasses -Pkotlin.incremental=false --no-daemon"
 
             - name: Check
-              uses: eskatos/gradle-command-action@v1
+              uses: gradle/gradle-build-action@v1
               with:
                   arguments: "check -PexcludeTests=org/rustPerformanceTests/** --continue -Pkotlin.incremental=false --no-daemon"
 
@@ -278,13 +284,13 @@ jobs:
 
             - name: Verify plugin
               if: matrix.verify-plugin
-              uses: eskatos/gradle-command-action@v1
+              uses: gradle/gradle-build-action@v1
               with:
                   arguments: ":plugin:verifyPlugin"
 
             - name: Check bundled Rust formatters
               if: matrix.os != 'windows-latest'
-              uses: eskatos/gradle-command-action@v1
+              uses: gradle/gradle-build-action@v1
               with:
                   arguments: "runPrettyPrintersTests --no-daemon"
 

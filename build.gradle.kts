@@ -1,7 +1,6 @@
 import groovy.json.JsonSlurper
 import org.apache.tools.ant.taskdefs.condition.Os.*
 import org.gradle.api.JavaVersion.VERSION_1_8
-import org.gradle.api.internal.HasConvention
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
@@ -11,7 +10,6 @@ import org.jetbrains.intellij.tasks.PatchPluginXmlTask
 import org.jetbrains.intellij.tasks.PrepareSandboxTask
 import org.jetbrains.intellij.tasks.PublishPluginTask
 import org.jetbrains.intellij.tasks.RunIdeTask
-import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jsoup.Jsoup
 import java.io.Writer
@@ -35,6 +33,7 @@ val baseVersion = when (baseIDE) {
     else -> error("Unexpected IDE name: `$baseIDE`")
 }
 
+val tomlPlugin = "org.toml.lang:${prop("tomlPluginVersion")}"
 val nativeDebugPlugin = "com.intellij.nativeDebug:${prop("nativeDebugPluginVersion")}"
 val graziePlugin = "tanvd.grazi"
 val psiViewerPlugin = "PsiViewer:${prop("psiViewerPluginVersion")}"
@@ -60,9 +59,7 @@ plugins {
 idea {
     module {
         // https://github.com/gradle/kotlin-dsl/issues/537/
-        // BACKCOMPAT: 2021.1. Drop `build-cache` from excluded dir.
-        // The corresponding code was temporarily left here to handle old not-removed `build-cache` dir
-        excludeDirs = excludeDirs + file("testData") + file("deps") + file("bin") + file("build-cache")
+        excludeDirs = excludeDirs + file("testData") + file("deps") + file("bin")
     }
 }
 
@@ -103,6 +100,10 @@ allprojects {
         sandboxDir.set("$buildDir/$baseIDE-sandbox-$platformVersion")
     }
 
+    grammarKit {
+        grammarKitRelease = "2021.1.2"
+    }
+
     tasks {
         withType<KotlinCompile> {
             kotlinOptions {
@@ -117,14 +118,26 @@ allprojects {
             untilBuild.set(prop("untilBuild"))
         }
 
-        buildSearchableOptions {
-            // buildSearchableOptions task doesn't make sense for non-root subprojects
-            val isRootProject = project.name in listOf("plugin", "intellij-toml")
-            enabled = isRootProject && prop("enableBuildSearchableOptions").toBoolean()
-        }
+        // All these tasks don't make sense for non-root subprojects
+        // Root project (i.e. `:plugin`) enables them itlsef if needed
+        runIde { enabled = false }
+        prepareSandbox { enabled = false }
+        buildSearchableOptions { enabled = false }
 
         test {
-            testLogging.showStandardStreams = prop("showStandardStreams").toBoolean()
+            // Drop when `org.jetbrains.intellij` plugin version will be at least 1.2.0
+            systemProperty("idea.force.use.core.classloader", "true")
+            testLogging {
+                showStandardStreams = prop("showStandardStreams").toBoolean()
+                afterSuite(
+                    KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
+                        if (desc.parent == null) { // will match the outermost suite
+                            val output = "Results: ${result.resultType} (${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped)"
+                            println(output)
+                        }
+                    })
+                )
+            }
             if (isCI) {
                 retry {
                     maxRetries.set(3)
@@ -244,7 +257,7 @@ project(":plugin") {
     intellij {
         pluginName.set("intellij-rust")
         val pluginList = mutableListOf(
-            project(":intellij-toml"),
+            tomlPlugin,
             intelliLangPlugin,
             graziePlugin,
             psiViewerPlugin,
@@ -281,6 +294,11 @@ project(":plugin") {
             // Set proper name for final plugin zip.
             // Otherwise, base name is the same as gradle module name
             archiveBaseName.set("intellij-rust")
+        }
+        runIde { enabled = true }
+        prepareSandbox { enabled = true }
+        buildSearchableOptions {
+            enabled = prop("enableBuildSearchableOptions").toBoolean()
         }
 
         withType<PrepareSandboxTask> {
@@ -335,13 +353,12 @@ project(":") {
     }
 
     dependencies {
-        implementation(project(":common"))
         implementation("org.jetbrains:markdown:0.2.0") {
             exclude(module = "kotlin-runtime")
             exclude(module = "kotlin-stdlib")
             exclude(module = "kotlin-stdlib-common")
         }
-        testImplementation(project(":common", "testOutput"))
+        api("com.vdurmont:semver4j:3.1.0")
         testImplementation("com.squareup.okhttp3:mockwebserver:4.9.0")
     }
 
@@ -383,12 +400,6 @@ project(":") {
                 include("**")
             }
         }
-
-        // BACKCOMPAT: 2021.1. Drop `clean` task customization
-        // The corresponding code was temporarily left here to handle old not-removed `build-cache` dir
-        clean {
-            delete(*(File("${rootDir}/build-cache").listFiles() ?: emptyArray()))
-        }
     }
 
     task("resolveDependencies") {
@@ -412,9 +423,7 @@ project(":idea") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -425,10 +434,8 @@ project(":clion") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         implementation(project(":debugger"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -443,28 +450,27 @@ project(":debugger") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
 project(":toml") {
     intellij {
-        plugins.set(listOf(project(":intellij-toml")))
+        plugins.set(listOf(tomlPlugin))
     }
     dependencies {
         implementation("org.eclipse.jgit:org.eclipse.jgit:5.9.0.202009080501-r") { exclude("org.slf4j") }
-        implementation("com.vdurmont:semver4j:3.1.0")
 
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
-
-        // TODO: Drop when gradle-intellij-plugin will be adding add all transitive dependencies
-        compileOnly(project(":intellij-toml:core"))
-        testCompileOnly(project(":intellij-toml:core"))
+    }
+    tasks {
+        // Set custom plugin directory name.
+        // Otherwise, `prepareSandbox`/`prepareTestingSandbox` tasks merge directories
+        // of `toml` plugin and `toml` module because of the same name into single one that's not expected
+        withType<PrepareSandboxTask> {
+            pluginName.set("rust-toml")
+        }
     }
 }
 
@@ -474,9 +480,7 @@ project(":intelliLang") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -487,27 +491,21 @@ project(":copyright") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
 project(":duplicates") {
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
 project(":coverage") {
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -517,9 +515,7 @@ project(":grazie") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -529,9 +525,7 @@ project(":js") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -542,56 +536,9 @@ project(":ml-completion") {
     dependencies {
         implementation("org.jetbrains.intellij.deps.completion:completion-ranking-rust:0.2.2")
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
-
-project(":intellij-toml") {
-    version = "0.2.$patchVersion.${prop("buildNumber")}$versionSuffix"
-
-    dependencies {
-        implementation(project(":intellij-toml:core"))
-    }
-
-    tasks {
-        withType<PublishPluginTask> {
-            token.set(prop("publishToken"))
-            channels.set(listOf(channel))
-        }
-    }
-}
-
-project(":intellij-toml:core") {
-    dependencies {
-        implementation(project(":common"))
-        testImplementation(project(":common", "testOutput"))
-    }
-
-    val generateTomlLexer = task<GenerateLexer>("generateTomlLexer") {
-        source = "src/main/grammars/TomlLexer.flex"
-        targetDir = "src/gen/org/toml/lang/lexer"
-        targetClass = "_TomlLexer"
-        purgeOldFiles = true
-    }
-
-    val generateTomlParser = task<GenerateParser>("generateTomlParser") {
-        source = "src/main/grammars/TomlParser.bnf"
-        targetRoot = "src/gen"
-        pathToParser = "/org/toml/lang/parse/TomlParser.java"
-        pathToPsiRoot = "/org/toml/lang/psi"
-        purgeOldFiles = true
-    }
-
-    tasks {
-        withType<KotlinCompile> {
-            dependsOn(generateTomlLexer, generateTomlParser)
-        }
-    }
-}
-
-project(":common")
 
 task("runPrettyPrintersTests") {
     doLast {
@@ -627,10 +574,13 @@ task("updateCompilerFeatures") {
                 package org.rust.lang.core
 
                 import org.rust.lang.core.FeatureState.ACCEPTED
+                import org.rust.lang.core.FeatureState.INCOMPLETE
                 import org.rust.lang.core.FeatureState.ACTIVE
 
             """.trimIndent())
             it.writeFeatures("active", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/active.rs")
+            it.writeln()
+            it.writeFeatures("incomplete", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/active.rs")
             it.writeln()
             it.writeFeatures("accepted", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/accepted.rs")
         }

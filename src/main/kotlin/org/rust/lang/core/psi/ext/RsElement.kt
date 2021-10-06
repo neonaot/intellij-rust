@@ -8,12 +8,12 @@ package org.rust.lang.core.psi.ext
 import com.intellij.extapi.psi.ASTWrapperPsiElement
 import com.intellij.extapi.psi.StubBasedPsiElementBase
 import com.intellij.lang.ASTNode
-import com.intellij.psi.PsiComment
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFileSystemItem
-import com.intellij.psi.PsiWhiteSpace
+import com.intellij.psi.*
+import com.intellij.psi.search.SearchScope
+import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.stubs.IStubElementType
 import com.intellij.psi.stubs.StubElement
+import com.intellij.util.Query
 import org.rust.cargo.project.model.CargoProject
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.workspace.CargoWorkspace
@@ -179,14 +179,40 @@ fun RsElement.deleteWithSurroundingComma() {
  * See [deleteWithSurroundingComma].
  */
 fun RsElement.deleteWithSurroundingCommaAndWhitespace() {
-    while (nextSibling?.isWhitespaceOrComment == true) {
-        nextSibling?.delete()
+    guardedLoop(5) {
+        if (nextSibling?.isWhitespaceOrComment == true) {
+            nextSibling?.delete()
+            return@guardedLoop false
+        }
+        true
     }
-    while (prevSibling?.isWhitespaceOrComment == true) {
-        prevSibling?.delete()
+    guardedLoop(5) {
+        if (prevSibling?.isWhitespaceOrComment == true) {
+            prevSibling?.delete()
+            return@guardedLoop false
+        }
+        true
     }
     deleteWithSurroundingComma()
 }
 
+/**
+ * Run the given `action` up to `count` times.
+ * If the action returns true, the loop immediately ends.
+ */
+private fun guardedLoop(count: Int, action: () -> Boolean) {
+    for (i in 0 until count) {
+        if (action()) return
+    }
+}
+
 private val PsiElement.isWhitespaceOrComment
     get(): Boolean = this is PsiWhiteSpace || this is PsiComment
+
+fun RsElement.searchReferences(scope: SearchScope? = null): Query<PsiReference> {
+    return if (scope == null) {
+        ReferencesSearch.search(this)
+    } else {
+        ReferencesSearch.search(this, scope)
+    }
+}

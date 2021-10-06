@@ -13,6 +13,9 @@ import com.intellij.psi.stubs.IStubElementType
 import com.intellij.psi.tree.TokenSet
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.project.workspace.PackageOrigin
+import org.rust.cargo.toolchain.RsToolchainBase
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.macros.MacroExpansionContext
 import org.rust.lang.core.macros.RsExpandedElement
@@ -23,6 +26,7 @@ import org.rust.lang.core.psi.RsElementTypes.*
 import org.rust.lang.core.resolve.DEFAULT_RECURSION_LIMIT
 import org.rust.lang.core.stubs.RsMacroCallStub
 import org.rust.openapiext.findFileByMaybeRelativePath
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.toPsiFile
 import org.rust.stdext.HashCode
 
@@ -114,7 +118,10 @@ private fun RsExpr.getValue(crateOrNull: Crate?): String? {
                     val crate = crateOrNull ?: expr.containingCrate ?: return null
                     when (val variableName = expr.getValue(crate)) {
                         "OUT_DIR" -> crate.outDir?.path
-                        else -> crate.env[variableName]
+                        else -> {
+                            val toolchain = if (isUnitTestMode) RsToolchainBase.suggest() else project.toolchain
+                            crate.env[variableName]?.let { toolchain?.toLocalPath(it) }
+                        }
                     }
                 }
                 else -> null
@@ -149,8 +156,8 @@ val RsMacroCall.bodyHash: HashCode?
         }
     }
 
-fun RsMacroCall.resolveToMacro(): RsMacro? =
-    path.reference?.resolve() as? RsMacro
+fun RsMacroCall.resolveToMacro(): RsMacroDefinitionBase? =
+    path.reference?.resolve() as? RsMacroDefinitionBase
 
 val RsMacroCall.expansionFlatten: List<RsExpandedElement>
     get() {
@@ -188,3 +195,6 @@ fun RsMacroCall.replaceWithExpr(expr: RsExpr): RsElement {
         else -> error("`replaceWithExpr` can only be used for expr or stmt context macros; got $context context")
     } as RsElement
 }
+
+val RsMacroCall.isStdTryMacro
+    get() = macroName == "try" && resolveToMacro()?.containingCargoPackage?.origin == PackageOrigin.STDLIB

@@ -6,21 +6,17 @@
 package org.rust.ide.annotator
 
 import com.intellij.codeInsight.daemon.impl.HighlightRangeExtension
-import com.intellij.codeInspection.LocalQuickFix
 import com.intellij.codeInspection.ProblemHighlightType
-import com.intellij.ide.annotator.AnnotatorBase
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.AnnotationSession
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.parentOfType
-import com.intellij.util.containers.addIfNotNull
 import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.ide.annotator.fixes.*
@@ -44,8 +40,10 @@ import org.rust.lang.core.types.ty.*
 import org.rust.lang.utils.RsDiagnostic
 import org.rust.lang.utils.RsDiagnostic.IncorrectFunctionArgumentCountError.FunctionType
 import org.rust.lang.utils.RsErrorCode
+import org.rust.lang.utils.SUPPORTED_CALLING_CONVENTIONS
 import org.rust.lang.utils.addToHolder
 import org.rust.lang.utils.evaluation.evaluate
+import org.rust.openapiext.isUnitTestMode
 
 class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     override fun isForceHighlightParents(file: PsiFile): Boolean = file is RsFile
@@ -62,6 +60,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
             override fun visitStructItem(o: RsStructItem) = checkDuplicates(rsHolder, o)
             override fun visitEnumItem(o: RsEnumItem) = checkEnumItem(rsHolder, o)
             override fun visitEnumVariant(o: RsEnumVariant) = checkEnumVariant(rsHolder, o)
+            override fun visitExternAbi(o: RsExternAbi) = checkExternAbi(rsHolder, o)
             override fun visitFunction(o: RsFunction) = checkFunction(rsHolder, o)
             override fun visitImplItem(o: RsImplItem) = checkImpl(rsHolder, o)
             override fun visitLabel(o: RsLabel) = checkLabel(rsHolder, o)
@@ -613,6 +612,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkConstParameter(holder: RsAnnotationHolder, constParameter: RsConstParameter) {
+        collectDiagnostics(holder, constParameter)
         checkConstGenerics(holder, constParameter)
         checkDuplicates(holder, constParameter)
     }
@@ -918,6 +918,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
 
     private fun checkTypeArgumentList(holder: RsAnnotationHolder, args: RsTypeArgumentList) {
         checkRedundantColonColon(holder, args)
+        checkConstArguments(holder, args.exprList)
     }
 
     private fun checkValueParameterList(holder: RsAnnotationHolder, args: RsValueParameterList) {
@@ -944,13 +945,15 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkValueArgumentList(holder: RsAnnotationHolder, args: RsValueArgumentList) {
-        val (expectedCount, functionType, function) = when (val parent = args.parent) {
-            is RsCallExpr -> parent.getFunctionCallContext()
-            is RsMethodCall -> parent.getFunctionCallContext()
-            else -> null
-        } ?: return
+        val (expectedCount, functionType, function) = args.getFunctionCallContext() ?: return
 
         val realCount = args.exprList.size
+        val fixes = if (function != null) {
+            ChangeFunctionSignatureFix.createIfCompatible(args, function)
+        } else {
+            emptyList()
+        }
+
         if (realCount < expectedCount) {
             // Mark only the right parenthesis
             val rparen = args.rparen
@@ -961,7 +964,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
             // But enable the quick fix on the whole argument range
             RsDiagnostic.IncorrectFunctionArgumentCountError(
                 args, expectedCount, realCount, functionType,
-                listOf(FillFunctionArgumentsFix(args)),
+                listOf(FillFunctionArgumentsFix(args)) + fixes,
                 textAttributes = TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES")
             ).addToHolder(holder)
         } else if (!functionType.variadic && realCount > expectedCount) {
@@ -969,24 +972,22 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                 holder.newErrorAnnotation(it, null)?.create()
             }
 
-            val fixes = mutableListOf<LocalQuickFix>(RemoveRedundantFunctionArgumentsFix(args, expectedCount))
-            if (function != null) {
-                fixes.addIfNotNull(ChangeFunctionSignatureFix.createIfCompatible(
-                    args, function,
-                    ChangeFunctionSignatureFix.ArgumentScanDirection.Forward
-                ))
-                fixes.addIfNotNull(ChangeFunctionSignatureFix.createIfCompatible(
-                    args, function,
-                    ChangeFunctionSignatureFix.ArgumentScanDirection.Backward
-                ))
-            }
-
             RsDiagnostic.IncorrectFunctionArgumentCountError(
                 args, expectedCount, realCount, functionType,
-                fixes = fixes,
+                fixes = listOf(RemoveRedundantFunctionArgumentsFix(args, expectedCount)) + fixes,
                 textAttributes = TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES")
             )
-            .addToHolder(holder)
+                .addToHolder(holder)
+        }
+
+        if (realCount == expectedCount && fixes.isNotEmpty()) {
+            val builder = holder.holder.newSilentAnnotation(HighlightSeverity.ERROR)
+                .textAttributes(TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES"))
+                .range(args.textRange)
+            for (fix in fixes) {
+                builder.withFix(fix)
+            }
+            builder.create()
         }
     }
 
@@ -1070,10 +1071,10 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                     RsDiagnostic.InvalidStartAttrError.InvalidParam(params[0].typeReference ?: params[0], 0)
                         .addToHolder(holder)
                 }
-                if (params[1].typeReference?.type != TyPointer(
+                if (params[1].typeReference?.type?.isEquivalentTo(TyPointer(
                         TyPointer(TyInteger.U8.INSTANCE, Mutability.IMMUTABLE),
                         Mutability.IMMUTABLE
-                    )
+                    )) == false
                 ) {
                     RsDiagnostic.InvalidStartAttrError.InvalidParam(params[1].typeReference ?: params[1], 1)
                         .addToHolder(holder)
@@ -1264,6 +1265,17 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         }
     }
 
+    private fun checkExternAbi(holder: RsAnnotationHolder, abi: RsExternAbi) {
+        val litExpr = abi.litExpr ?: return
+        val abiName = litExpr.stringValue ?: return
+        if (abiName !in SUPPORTED_CALLING_CONVENTIONS) {
+            RsDiagnostic.InvalidAbi(litExpr, abiName).addToHolder(holder)
+        } else {
+            val compilerFeature = SUPPORTED_CALLING_CONVENTIONS[abiName]
+            compilerFeature?.check(holder, litExpr, "$abiName ABI")
+        }
+    }
+
     private fun isInTraitImpl(o: RsVis): Boolean {
         val impl = o.parent?.parent?.parent
         return impl is RsImplItem && impl.traitRef != null
@@ -1327,35 +1339,43 @@ private fun checkDuplicates(
 }
 
 private fun checkConstGenerics(holder: RsAnnotationHolder, constParameter: RsConstParameter) {
-    val constGenericAvailability = CONST_GENERICS.availability(constParameter)
-    if (constGenericAvailability == AVAILABLE) return
+    MIN_CONST_GENERICS.check(holder, constParameter, "min const generics")
+    checkConstGenericsDefaults(holder, constParameter.expr)
+    checkConstArguments(holder, listOfNotNull(constParameter.expr))
 
-    val version = constParameter.cargoProject?.rustcInfo?.version
-    val feature = when (constParameter.typeReference?.type) {
-        is TyInteger, is TyBool, is TyChar -> {
-            val current = version?.semver
-            val since = MIN_CONST_GENERICS.since
-            if (current != null &&
-                since != null &&
-                current.isGreaterOrEqualThan(since.major, since.minor, since.patch)) {
-                MIN_CONST_GENERICS
-            } else {
-                CONST_GENERICS
-            }
+    val typeReference = constParameter.typeReference
+    val ty = typeReference?.type ?: return
+    if (ty !is TyInteger && ty !is TyBool && ty !is TyChar) {
+        ADT_CONST_PARAMS.check(holder, typeReference, "adt const params")
+    }
+}
+
+private fun checkConstGenericsDefaults(holder: RsAnnotationHolder, default: RsExpr?) {
+    if (default == null) return
+    CONST_GENERICS_DEFAULTS.check(holder, default, "const generics defaults")
+    when (default.ancestorStrict<RsGenericDeclaration>()) {
+        is RsStructItem,
+        is RsEnumItem,
+        is RsTypeAlias,
+        is RsTraitItem,
+        null -> {}
+        else -> RsDiagnostic.DefaultsConstGenericNotAllowed(default).addToHolder(holder)
+    }
+}
+
+private fun checkConstArguments(holder: RsAnnotationHolder, args: List<RsExpr>) {
+    for (expr in args) {
+        val ok = when (expr) {
+            is RsLitExpr, is RsBlockExpr -> true
+            is RsPathExpr -> !expr.path.hasColonColon
+            is RsUnaryExpr -> expr.minus != null && expr.expr?.type is TyNumeric
+            else -> false
         }
-        else -> CONST_GENERICS
-    }
 
-    if (feature == CONST_GENERICS &&
-        constGenericAvailability == CAN_BE_ADDED &&
-        MIN_CONST_GENERICS.availability(constParameter) == AVAILABLE) {
-        val typeReference = constParameter.typeReference ?: return
-        val message = RsDiagnostic.ForbiddenConstGenericType(typeReference)
-        message.addToHolder(holder)
-        return
+        if (!ok) {
+            RsDiagnostic.InvalidConstGenericArgument(expr).addToHolder(holder)
+        }
     }
-
-    feature.check(holder, constParameter, "const generics")
 }
 
 private fun checkParamAttrs(holder: RsAnnotationHolder, o: RsOuterAttributeOwner) {
@@ -1470,6 +1490,14 @@ data class FunctionCallContext(
     val functionType: FunctionType,
     val function: RsFunction? = null
 )
+
+fun RsValueArgumentList.getFunctionCallContext(): FunctionCallContext? {
+    return when (val parent = parent) {
+        is RsCallExpr -> parent.getFunctionCallContext()
+        is RsMethodCall -> parent.getFunctionCallContext()
+        else -> null
+    }
+}
 
 fun RsCallExpr.getFunctionCallContext(): FunctionCallContext? {
     val path = (expr as? RsPathExpr)?.path ?: return null

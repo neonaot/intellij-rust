@@ -7,6 +7,8 @@ package org.rust.lang.core.resolve
 
 import com.intellij.openapi.util.SystemInfo
 import org.rust.*
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.lang.core.macros.MacroExpansionScope
 import org.rust.lang.core.types.infer.TypeInferenceMarks
 import org.rust.stdext.BothEditions
@@ -272,6 +274,15 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         fn main() {
             assert_eq!("Hello, World!", "");
         }   //^ ...libcore/macros/mod.rs|...core/src/macros/mod.rs
+    """)
+
+    @UseNewResolve // macro 2.0 since rust 1.55
+    fun `test asm macro`() = stubOnlyResolve("""
+    //- main.rs
+        #![feature(asm)]
+        fn main() {
+            asm!("nop");
+        } //^ ...libcore/macros/mod.rs|...core/src/macros/mod.rs|...core/src/lib.rs
     """)
 
     fun `test iterating a vec`() = stubOnlyResolve("""
@@ -717,7 +728,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
     @ExpandMacros(MacroExpansionScope.ALL, "actual_std")
     @ProjectDescriptor(WithActualStdlibRustProjectDescriptor::class)
     fun `test resolve in os module unix`() {
-        if (!SystemInfo.isUnix) return
+        if (!SystemInfo.isUnix && project.toolchain !is RsWslToolchain) return
         stubOnlyResolve("""
             //- main.rs
             use std::os::unix;
@@ -729,7 +740,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
     @ExpandMacros(MacroExpansionScope.ALL, "actual_std")
     @ProjectDescriptor(WithActualStdlibRustProjectDescriptor::class)
     fun `test resolve in os module windows`() {
-        if (!SystemInfo.isWindows) return
+        if (!SystemInfo.isWindows || project.toolchain is RsWslToolchain) return
         stubOnlyResolve("""
             //- main.rs
             use std::os::windows;

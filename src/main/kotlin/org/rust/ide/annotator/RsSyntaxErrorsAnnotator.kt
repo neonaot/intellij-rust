@@ -7,7 +7,6 @@ package org.rust.ide.annotator
 
 import com.intellij.codeInspection.InspectionManager
 import com.intellij.codeInspection.ProblemHighlightType
-import com.intellij.ide.annotator.AnnotatorBase
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.util.TextRange
@@ -15,9 +14,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import org.rust.ide.annotator.fixes.AddTypeFix
 import org.rust.ide.inspections.fixes.SubstituteTextFix
-import org.rust.lang.core.CONST_GENERICS
 import org.rust.lang.core.C_VARIADIC
-import org.rust.lang.core.FeatureAvailability
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.types.type
@@ -30,6 +27,7 @@ import java.lang.Integer.max
 class RsSyntaxErrorsAnnotator : AnnotatorBase() {
     override fun annotateInternal(element: PsiElement, holder: AnnotationHolder) {
         when (element) {
+            is RsExternAbi -> checkExternAbi(holder, element)
             is RsItemElement -> {
                 checkItem(holder, element)
                 when (element) {
@@ -37,6 +35,9 @@ class RsSyntaxErrorsAnnotator : AnnotatorBase() {
                     is RsStructItem -> checkStructItem(holder, element)
                     is RsTypeAlias -> checkTypeAlias(holder, element)
                     is RsConstant -> checkConstant(holder, element)
+                    is RsModItem -> checkModItem(holder, element)
+                    is RsModDeclItem -> checkModDeclItem(holder, element)
+                    is RsForeignModItem -> checkForeignModItem(holder, element)
                 }
             }
             is RsMacro -> checkMacro(holder, element)
@@ -210,7 +211,7 @@ private fun checkValueParameterList(holder: AnnotationHolder, params: RsValuePar
 
 private fun checkVariadic(holder: AnnotationHolder, fn: RsFunction, dot3: PsiElement?) {
     if (dot3 == null) return
-    if (fn.isUnsafe && fn.abiName == "\"C\"") {
+    if (fn.isUnsafe && fn.abiName == "C") {
         C_VARIADIC.check(holder, dot3, "C-variadic functions")
     } else {
         deny(dot3, holder, "${fn.title} cannot be variadic")
@@ -295,11 +296,10 @@ private fun checkTypeArgumentList(holder: AnnotationHolder, args: RsTypeArgument
 }
 
 private fun checkTypeList(typeList: PsiElement, elementsName: String, holder: AnnotationHolder) {
-    val isConstGenericsAvailable = CONST_GENERICS.availability(typeList) == FeatureAvailability.AVAILABLE
     var kind = TypeKind.LIFETIME
     typeList.forEachChild { child ->
         val newKind = TypeKind.forType(child) ?: return@forEachChild
-        if (newKind.canStandAfter(kind, isConstGenericsAvailable)) {
+        if (newKind.canStandAfter(kind)) {
             kind = newKind
         } else {
             val newStateName = newKind.presentableName.capitalize()
@@ -311,6 +311,32 @@ private fun checkTypeList(typeList: PsiElement, elementsName: String, holder: An
     }
 }
 
+private fun checkExternAbi(holder: AnnotationHolder, element: RsExternAbi) {
+    val litExpr = element.litExpr ?: return
+    val abyLiteralKind = litExpr.kind ?: return
+    if (abyLiteralKind !is RsLiteralKind.String) {
+        holder.newAnnotation(HighlightSeverity.ERROR, "Non-string ABI literal").range(litExpr).create()
+    }
+}
+
+private fun checkModDeclItem(holder: AnnotationHolder, element: RsModDeclItem) {
+    checkInvalidUnsafe(holder, element.unsafe, "Module")
+}
+
+private fun checkModItem(holder: AnnotationHolder, element: RsModItem) {
+    checkInvalidUnsafe(holder, element.unsafe, "Module")
+}
+
+private fun checkForeignModItem(holder: AnnotationHolder, element: RsForeignModItem) {
+    checkInvalidUnsafe(holder, element.unsafe, "Extern block")
+}
+
+private fun checkInvalidUnsafe(holder: AnnotationHolder, unsafe: PsiElement?, itemName: String) {
+    if (unsafe != null) {
+        holder.newAnnotation(HighlightSeverity.ERROR, "$itemName cannot be declared unsafe").range(unsafe).create()
+    }
+}
+
 private enum class TypeKind {
     LIFETIME,
     TYPE,
@@ -318,8 +344,7 @@ private enum class TypeKind {
 
     val presentableName: String get() = name.toLowerCase()
 
-    fun canStandAfter(prev: TypeKind, isConstGenericsAvailable: Boolean): Boolean =
-        if (isConstGenericsAvailable) this !== LIFETIME || prev === LIFETIME else ordinal >= prev.ordinal
+    fun canStandAfter(prev: TypeKind): Boolean = this !== LIFETIME || prev === LIFETIME
 
     companion object {
         fun forType(seekingElement: PsiElement): TypeKind? =

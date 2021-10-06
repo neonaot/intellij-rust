@@ -35,6 +35,7 @@ import org.rust.cargo.toolchain.tools.Rustup
 import org.rust.cargo.toolchain.tools.cargo
 import org.rust.cargo.toolchain.tools.rustc
 import org.rust.cargo.toolchain.tools.rustup
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.cargo.util.DownloadResult
 import org.rust.ide.experiments.RsExperiments
 import org.rust.openapiext.RsPathManager
@@ -221,7 +222,8 @@ open class WithProcMacros(
             if (toolchain == null) {
                 return "No toolchain"
             }
-            if (RsPathManager.nativeHelper() == null && System.getenv("CI") == null) {
+            if (RsPathManager.nativeHelper(toolchain is RsWslToolchain) == null &&
+                System.getenv("CI") == null) {
                 return "no native-helper executable"
             }
             return delegate.skipTestReason
@@ -240,7 +242,7 @@ open class WithProcMacros(
             setExperimentalFeatureEnabled(RsExperiments.EVALUATE_BUILD_SCRIPTS, true, disposable)
             val testProcMacroProjectPath = Path.of("testData/$TEST_PROC_MACROS")
             fullyRefreshDirectoryInUnitTests(LocalFileSystem.getInstance().findFileByNioFile(testProcMacroProjectPath)!!)
-            val testProcMacroProject = toolchain!!.cargo().fullProjectDescription(project, testProcMacroProjectPath)
+            val (testProcMacroProject, _) = toolchain!!.cargo().fullProjectDescription(project, testProcMacroProjectPath)
             procMacroPackage = testProcMacroProject.packages.find { it.name == TEST_PROC_MACROS }!!
                 .copy(origin = PackageOrigin.DEPENDENCY)
             procMacroPackage

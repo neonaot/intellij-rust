@@ -22,9 +22,11 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.impl.FileDocumentManagerImpl
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.module.ModuleManager
+import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.util.AbstractProgressIndicatorExBase
 import com.intellij.openapi.progress.util.ProgressIndicatorUtils
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
@@ -36,7 +38,7 @@ import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileWithId
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.openapi.wm.ex.ProgressIndicatorEx
 import com.intellij.psi.*
 import com.intellij.psi.impl.PsiDocumentManagerBase
 import com.intellij.psi.search.GlobalSearchScope
@@ -54,6 +56,11 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.reflect.KProperty
+
+val isUnitTestMode: Boolean get() = ApplicationManager.getApplication().isUnitTestMode
+val isHeadlessEnvironment: Boolean get() = ApplicationManager.getApplication().isHeadlessEnvironment
+val isDispatchThread: Boolean get() = ApplicationManager.getApplication().isDispatchThread
+val isInternal: Boolean get() = ApplicationManager.getApplication().isInternal
 
 fun <T> Project.runWriteCommandAction(command: () -> T): T {
     return WriteCommandAction.runWriteCommandAction(this, Computable { command() })
@@ -309,6 +316,24 @@ fun <T> executeUnderProgress(indicator: ProgressIndicator, action: () -> T): T {
     ProgressManager.getInstance().executeProcessUnderProgress({ result = action() }, indicator)
     @Suppress("UNCHECKED_CAST")
     return result ?: (null as T)
+}
+
+/**
+ * [this] indicator can be an instance of [com.intellij.openapi.progress.impl.BackgroundableProcessIndicator]
+ * class, which is thread sensitive and its [ProgressIndicator.checkCanceled] method should be used only from
+ * a single thread (see [com.intellij.openapi.progress.util.ProgressWindow.MyDelegate.checkCanceled]).
+ * So we propagate cancellation.
+ */
+fun ProgressIndicator.toThreadSafeProgressIndicator(): ProgressIndicator {
+    return if (this is ProgressIndicatorEx) {
+        val threadSafeIndicator = EmptyProgressIndicator()
+        addStateDelegate(object : AbstractProgressIndicatorExBase() {
+            override fun cancel() = threadSafeIndicator.cancel()
+        })
+        threadSafeIndicator
+    } else {
+        this
+    }
 }
 
 fun <T : PsiElement> T.createSmartPointer(): SmartPsiElementPointer<T> =

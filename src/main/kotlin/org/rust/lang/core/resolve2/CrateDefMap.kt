@@ -24,6 +24,7 @@ import org.rust.lang.core.psi.RsProcMacroKind
 import org.rust.lang.core.psi.ext.RsMod
 import org.rust.lang.core.resolve.Namespace
 import org.rust.lang.core.resolve2.Visibility.*
+import org.rust.lang.core.resolve2.util.GlobImportGraph
 import org.rust.lang.core.resolve2.util.PerNsHashMap
 import org.rust.openapiext.fileId
 import org.rust.openapiext.testAssert
@@ -39,20 +40,20 @@ class CrateDefMap(
     /** Used only by `extern crate crate_name;` declarations */
     val directDependenciesDefMaps: Map<String, CrateDefMap>,
     private val allDependenciesDefMaps: Map<CratePersistentId, CrateDefMap>,
-    /**
-     * The prelude module for this crate. This either comes from an import
-     * marked with the `prelude_import` attribute, or (in the normal case) from
-     * a dependency (`std` or `core`).
-     */
-    var prelude: ModData?,
+    initialExternPrelude: Map<String, CrateDefMap>,
     val metaData: CrateMetaData,
     /** Equal to `root.macroIndex.single()` */
     val rootModMacroIndex: Int,
+    /** Attributes of root module */
+    val stdlibAttributes: RsFile.Attributes,
     /** Only for debug */
     val crateDescription: String,
 ) {
+    /** The prelude module for this crate. See [injectPrelude] */
+    var prelude: ModData? = null
+
     /** It is needed at least to handle `extern crate name as alias;` */
-    val externPrelude: MutableMap<String, CrateDefMap> = directDependenciesDefMaps.toMap(hashMapOf())
+    val externPrelude: MutableMap<String, CrateDefMap> = initialExternPrelude.toMap(hashMapOf())
 
     /**
      * File included via `include!` macro has same [FileInfo.modData] as main file,
@@ -74,6 +75,8 @@ class CrateDefMap(
 
     /** Stored as memory optimization */
     val rootAsPerNs: PerNs = PerNs.types(VisItem(root.path, Public, true))
+
+    val globImportGraph: GlobImportGraph = GlobImportGraph()
 
     fun getDefMap(crate: CratePersistentId): CrateDefMap? =
         if (crate == this.crate) this else allDependenciesDefMaps[crate]
@@ -151,6 +154,8 @@ class CrateDefMap(
         val fileId = file.virtualFile.fileId
         // TODO: File included in module tree multiple times ?
         // testAssert { fileId !in fileInfos }
+        val existing = fileInfos[fileId]
+        if (existing != null && !modData.isDeeplyEnabledByCfg && existing.modData.isDeeplyEnabledByCfg) return
         fileInfos[fileId] = FileInfo(file.modificationStampForResolve, modData, fileHash)
     }
 
@@ -510,7 +515,7 @@ data class VisItem(
 
     fun adjust(visibilityNew: Visibility, isFromNamedImport: Boolean): VisItem =
         copy(
-            visibility = if (visibility.isInvisible) visibility else visibilityNew,
+            visibility = visibilityNew.intersect(visibility),
             isFromNamedImport = isFromNamedImport
         )
 
@@ -569,6 +574,8 @@ sealed class Visibility {
             }
         }
     }
+
+    fun intersect(other: Visibility): Visibility = if (isStrictlyMorePermissive(other)) other else this
 
     val type: VisibilityType
         get() = when (this) {

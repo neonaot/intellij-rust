@@ -5,9 +5,14 @@
 
 package org.rust.lang.core.resolve2
 
+import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
-import org.rust.cargo.project.workspace.CargoWorkspace
-import org.rust.cargo.util.AutoInjectedCrates
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition.EDITION_2015
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition.EDITION_2018
+import org.rust.cargo.project.workspace.PackageOrigin.STDLIB
+import org.rust.cargo.project.workspace.PackageOrigin.STDLIB_DEPENDENCY
+import org.rust.cargo.util.AutoInjectedCrates.CORE
+import org.rust.cargo.util.AutoInjectedCrates.STD
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.psi.RsFile
@@ -16,19 +21,24 @@ import org.rust.lang.core.psi.shouldIndexFile
 import org.rust.openapiext.checkReadAccessAllowed
 import org.rust.openapiext.fileId
 import org.rust.openapiext.testAssert
-import org.rust.stdext.mapToSet
+import java.util.concurrent.ExecutorService
 
 /**
  * Returns `null` if [crate] has null `id` or `rootMod`,
  * or if crate should not be indexed (e.g. test/bench non-workspace crate)
  */
-fun buildDefMap(crate: Crate, allDependenciesDefMaps: Map<Crate, CrateDefMap>): CrateDefMap? {
+fun buildDefMap(
+    crate: Crate,
+    allDependenciesDefMaps: Map<Crate, CrateDefMap>,
+    pool: ExecutorService?,
+    indicator: ProgressIndicator
+): CrateDefMap? {
     checkReadAccessAllowed()
     val project = crate.project
     check(project.isNewResolveEnabled)
     val context = CollectorContext(crate, project)
     val defMap = buildDefMapContainingExplicitItems(context, allDependenciesDefMaps) ?: return null
-    DefCollector(project, defMap, context).collect()
+    DefCollector(project, defMap, context, pool, indicator).collect()
     defMap.afterBuilt()
     testAssert({ !isCrateChanged(crate, defMap) }, { "DefMap $defMap should be up-to-date just after built" })
     return defMap
@@ -57,8 +67,8 @@ private fun buildDefMapContainingExplicitItems(
     val crateRootFile = crate.rootModFile ?: return null
     if (!shouldIndexFile(context.project, crateRootFile)) return null
 
-    val (directDependenciesDefMaps, allDependenciesDefMapsById) =
-        getDirectAndAllDependencies(crate, allDependenciesDefMaps)
+    val stdlibAttributes = crateRoot.getStdlibAttributes(crate)
+    val dependenciesInfo = getDependenciesDefMaps(crate, allDependenciesDefMaps, stdlibAttributes)
 
     val crateRootOwnedDirectory = crateRoot.virtualFile?.parent
         ?: error("Can't find parent directory for crate root of $crate crate")
@@ -81,15 +91,17 @@ private fun buildDefMapContainingExplicitItems(
     val defMap = CrateDefMap(
         crate = crateId,
         root = crateRootData,
-        directDependenciesDefMaps = directDependenciesDefMaps,
-        allDependenciesDefMaps = allDependenciesDefMapsById,
-        prelude = findPrelude(crate, allDependenciesDefMaps),
+        directDependenciesDefMaps = dependenciesInfo.directDependencies,
+        allDependenciesDefMaps = dependenciesInfo.allDependencies,
+        initialExternPrelude = dependenciesInfo.initialExternPrelude,
         metaData = CrateMetaData(crate),
         rootModMacroIndex = rootModMacroIndex,
+        stdlibAttributes = stdlibAttributes,
         crateDescription = crateDescription
     )
 
-    createExternCrateStdImport(crate, crateRoot, crateRootData)?.let {
+    injectPrelude(defMap)
+    createExternCrateStdImport(defMap)?.let {
         context.imports += it
         defMap.importExternCrateMacros(it.usePath.single())
     }
@@ -101,63 +113,78 @@ private fun buildDefMapContainingExplicitItems(
 }
 
 private data class DependenciesDefMaps(
-    val directDependenciesDefMaps: Map<String, CrateDefMap>,
-    val allDependenciesDefMaps: Map<CratePersistentId, CrateDefMap>,
+    val directDependencies: Map<String, CrateDefMap>,
+    val allDependencies: Map<CratePersistentId, CrateDefMap>,
+    val initialExternPrelude: Map<String, CrateDefMap>,
 )
 
-private fun getDirectAndAllDependencies(
+private fun getDependenciesDefMaps(
     crate: Crate,
-    allDependenciesDefMaps: Map<Crate, CrateDefMap>
+    allDependenciesDefMaps: Map<Crate, CrateDefMap>,
+    stdlibAttributes: RsFile.Attributes
 ): DependenciesDefMaps {
     val allDependenciesDefMapsById = allDependenciesDefMaps
         .filterKeys { it.id != null }
         .mapKeysTo(hashMapOf()) { it.key.id!! }
-    val directDependenciesDefMaps = crate.dependencies
+    val directDependenciesByCrate = crate.dependencies
         .mapNotNull {
             val id = it.crate.id ?: return@mapNotNull null
             val defMap = allDependenciesDefMapsById[id] ?: return@mapNotNull null
-            it.normName to defMap
+            it to defMap
         }
         .toMap(hashMapOf())
-    return DependenciesDefMaps(directDependenciesDefMaps, allDependenciesDefMapsById)
+    val directDependenciesById = directDependenciesByCrate
+        .mapKeysTo(hashMapOf()) { it.key.normName }
+    val initialExternPrelude = directDependenciesByCrate
+        .filterKeys { crate.shouldAutoInjectDependency(it, stdlibAttributes) }
+        .mapKeysTo(hashMapOf()) { it.key.normName }
+    return DependenciesDefMaps(directDependenciesById, allDependenciesDefMapsById, initialExternPrelude)
+}
+
+private fun Crate.shouldAutoInjectDependency(dependency: Crate.Dependency, stdlibAttributes: RsFile.Attributes): Boolean {
+    if (origin == STDLIB || origin == STDLIB_DEPENDENCY) return true
+    return when (dependency.crate.origin) {
+        STDLIB -> dependency.normName in listOf(STD, CORE) && stdlibAttributes.canUseStdlibCrate(dependency.normName)
+            || kind.isProcMacro && dependency.normName == "proc_macro"
+        STDLIB_DEPENDENCY -> false
+        else -> true
+    }
 }
 
 /**
- * Look for the prelude.
- * If the dependency defines a prelude, we overwrite an already defined prelude.
- * This is necessary to import the "std" prelude if a crate depends on both "core" and "std".
+ * Finds prelude based on edition and root module attributes such as ```#[no_std]```.
+ * Prelude for current crate can be overwritten by ```#[prelude_import]```.
+ * See also:
+ * - https://github.com/rust-lang/rust/blob/master/compiler/rustc_builtin_macros/src/standard_library_imports.rs
+ * - https://github.com/rust-lang/rust/pull/82217
  */
-private fun findPrelude(crate: Crate, allDependenciesDefMaps: Map<Crate, CrateDefMap>): ModData? {
-    /**
-     * Correct prelude is always selected (core vs std), because [Crate.flatDependencies] is top sorted.
-     * And we peek prelude from latest dependency.
-     */
-    val dependencies = crate.dependencies.mapToSet { it.crate }
-    val dependenciesTopSorted = crate.flatDependencies.filter { it in dependencies }
-    return dependenciesTopSorted
-        .asReversed()
-        .asSequence()
-        .mapNotNull { allDependenciesDefMaps[it]?.prelude }
-        .firstOrNull()
+private fun injectPrelude(defMap: CrateDefMap) {
+    val preludeCrate = defMap.stdlibAttributes.getAutoInjectedCrate() ?: return
+    val preludeName = when (val edition = defMap.metaData.edition) {
+        // BACKCOMPAT: Rust 1.55.0. Always use "rust_$edition"
+        // We don't use "rust_2015" and "rust_2018" in order to be compatible with old rustc
+        EDITION_2015, EDITION_2018 -> "v1"
+        else -> "rust_${edition.presentation}"
+    }
+    val path = arrayOf("" /* absolute path */, preludeCrate, "prelude", preludeName)
+    val result = defMap.resolvePathFp(defMap.root, path, ResolveMode.IMPORT, withInvisibleItems = false)
+    val resultItem = result.resolvedDef.types.singleOrNull() ?: return
+    defMap.prelude = defMap.tryCastToModData(resultItem)
 }
 
-private fun createExternCrateStdImport(crate: Crate, crateRoot: RsFile, crateRootData: ModData): Import? {
+private fun createExternCrateStdImport(defMap: CrateDefMap): Import? {
     // Rust injects implicit `extern crate std` in every crate root module unless it is
     // a `#![no_std]` crate, in which case `extern crate core` is injected. However, if
     // there is a (unstable?) `#![no_core]` attribute, nothing is injected.
     //
     // https://doc.rust-lang.org/book/using-rust-without-the-standard-library.html
     // The stdlib lib itself is `#![no_std]`, and the core is `#![no_core]`
-    val name = when (crateRoot.getStdlibAttributes(crate)) {
-        RsFile.Attributes.NONE -> AutoInjectedCrates.STD
-        RsFile.Attributes.NO_STD -> AutoInjectedCrates.CORE
-        RsFile.Attributes.NO_CORE -> return null
-    }
+    val name = defMap.stdlibAttributes.getAutoInjectedCrate() ?: return null
     return Import(
-        crateRootData,
+        defMap.root,
         arrayOf(name),
-        nameInScope = if (crate.edition == CargoWorkspace.Edition.EDITION_2015) name else "_",
-        visibility = crateRootData.visibilityInSelf,
+        nameInScope = if (defMap.metaData.edition == EDITION_2015) name else "_",
+        visibility = defMap.root.visibilityInSelf,
         isExternCrate = true
     )
 }

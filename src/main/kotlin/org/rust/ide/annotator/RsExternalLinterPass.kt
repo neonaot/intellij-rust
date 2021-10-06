@@ -25,7 +25,6 @@ import com.intellij.openapi.progress.util.BackgroundTaskUtil
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiFile
 import com.intellij.util.ui.update.MergingUpdateQueue
 import com.intellij.util.ui.update.Update
@@ -35,6 +34,7 @@ import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.toolchain.tools.CargoCheckArgs
 import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.ext.containingCargoTarget
+import org.rust.openapiext.isUnitTestMode
 
 class RsExternalLinterPass(
     private val factory: RsExternalLinterPassFactory,
@@ -42,7 +42,7 @@ class RsExternalLinterPass(
     private val editor: Editor
 ) : TextEditorHighlightingPass(file.project, editor.document), DumbAware {
     @Suppress("UnstableApiUsage")
-    private val annotationHolder: AnnotationHolderImpl = AnnotationHolderImpl(AnnotationSession(file))
+    private val annotationHolder: AnnotationHolderImpl = AnnotationHolderImpl(AnnotationSession(file), false)
     @Volatile
     private var annotationInfo: Lazy<RsExternalLinterResult?>? = null
     private val annotationResult: RsExternalLinterResult? get() = annotationInfo?.value

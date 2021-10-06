@@ -19,6 +19,7 @@ import org.rust.cargo.toolchain.RsToolchainBase
 import org.rust.cargo.toolchain.RsToolchainProvider
 import org.rust.ide.experiments.RsExperiments
 import org.rust.openapiext.isFeatureEnabled
+import org.rust.openapiext.isUnitTestMode
 import java.nio.file.Paths
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
@@ -47,9 +48,6 @@ interface RustProjectSettingsService {
         var compileAllTargets: Boolean = true,
         var useOffline: Boolean = false,
         var macroExpansionEngine: MacroExpansionEngine = defaultMacroExpansionEngine,
-        @AffectsHighlighting
-        var newResolveEnabled: Boolean = isFeatureEnabled(RsExperiments.RESOLVE_NEW_ENGINE)
-            && System.getenv("INTELLIJ_RUST_FORCE_USE_OLD_RESOLVE") == null,
         @AffectsHighlighting
         var doctestInjectionEnabled: Boolean = true,
         var useRustfmt: Boolean = false,
@@ -108,7 +106,6 @@ interface RustProjectSettingsService {
     val compileAllTargets: Boolean
     val useOffline: Boolean
     val macroExpansionEngine: MacroExpansionEngine
-    val newResolveEnabled: Boolean
     val doctestInjectionEnabled: Boolean
     val useRustfmt: Boolean
     val runRustfmtOnSave: Boolean
@@ -123,9 +120,10 @@ interface RustProjectSettingsService {
     fun configureToolchain()
 
     companion object {
-        val RUST_SETTINGS_TOPIC: Topic<RustSettingsListener> = Topic(
+        val RUST_SETTINGS_TOPIC: Topic<RustSettingsListener> = Topic.create(
             "rust settings changes",
-            RustSettingsListener::class.java
+            RustSettingsListener::class.java,
+            Topic.BroadcastDirection.TO_PARENT
         )
 
         private val defaultMacroExpansionEngine: MacroExpansionEngine
@@ -164,4 +162,12 @@ val Project.rustSettings: RustProjectSettingsService
     get() = ServiceManager.getService(this, RustProjectSettingsService::class.java)
         ?: error("Failed to get RustProjectSettingsService for $this")
 
-val Project.toolchain: RsToolchainBase? get() = rustSettings.toolchain
+val Project.toolchain: RsToolchainBase?
+    get() {
+        val toolchain = rustSettings.toolchain
+        return when {
+            toolchain != null -> toolchain
+            isUnitTestMode -> RsToolchainBase.suggest()
+            else -> null
+        }
+    }

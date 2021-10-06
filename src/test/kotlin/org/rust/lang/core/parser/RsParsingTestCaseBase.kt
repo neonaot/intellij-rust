@@ -5,7 +5,6 @@
 
 package org.rust.lang.core.parser
 
-import com.intellij.TestCase
 import com.intellij.core.CoreInjectedLanguageManager
 import com.intellij.lang.LanguageBraceMatching
 import com.intellij.lang.injection.InjectedLanguageManager
@@ -15,10 +14,14 @@ import com.intellij.psi.PsiErrorElement
 import com.intellij.psi.PsiFile
 import com.intellij.testFramework.ParsingTestCase
 import org.jetbrains.annotations.NonNls
+import org.junit.internal.runners.JUnit38ClassRunner
+import org.junit.runner.RunWith
 import org.rust.RsTestCase
+import org.rust.TestCase
 import org.rust.ide.typing.RsBraceMatcher
 import org.rust.lang.RsLanguage
 
+@RunWith(JUnit38ClassRunner::class) // TODO: drop the annotation when issue with Gradle test scanning go away
 abstract class RsParsingTestCaseBase(@NonNls dataPath: String) : ParsingTestCase(
     "org/rust/lang/core/parser/fixtures/$dataPath",
     "rs",

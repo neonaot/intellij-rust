@@ -9,6 +9,7 @@ import com.intellij.openapi.progress.PerformInBackgroundOption
 import com.intellij.openapi.project.Project
 import com.intellij.profiler.DummyCallTreeBuilder
 import com.intellij.profiler.api.*
+import com.intellij.profiler.clion.dtrace.DTraceProfilerSettings
 import com.intellij.profiler.dtrace.DTraceProfilerProcessBase
 import com.intellij.profiler.dtrace.FullDumpParser
 import com.intellij.profiler.dtrace.SimpleProfilerSettingsState
@@ -31,14 +32,16 @@ class RsDTraceProfilerProcess private constructor(
     dtraceProcessHandler: SudoProcessHandler
 ) : DTraceProfilerProcessBase(project, targetProcess, attachedTimestamp, dtraceProcessHandler) {
 
-
     // We can't use [com.intellij.profiler.clion.ProfilerUtilsKt.CPP_PROFILER_HELP_TOPIC] directly
     // because it has `internal` modifier
     override val helpId: String = "procedures.profiler"
 
     override fun createDumpParser(): FullDumpParser<BaseCallStackElement> {
         val cachingStackElementReader = RsCachingStackElementReader.getInstance(project)
-        return FullDumpParser(NativeThread.Companion::fromId, cachingStackElementReader::parseStackElement)
+        return FullDumpParser(
+            { NativeThread(it, "thread with id $it") },
+            cachingStackElementReader::parseStackElement
+        )
     }
 
     override fun createDumpWriter(data: NewCallTreeOnlyProfilerData): ProfilerDumpWriter =
@@ -68,7 +71,7 @@ class RsDTraceProfilerProcess private constructor(
             timeoutInMilliseconds: Int,
             project: Project
         ): Promise<RsDTraceProfilerProcess> {
-            val settings = getDTraceSettings()
+            val settings = DTraceProfilerSettings.instance.state
 
             // WARNING: Do not use such solution for other needs!
             // We want to always use -xmangled option because DTrace cannot demangle Rust symbols correctly

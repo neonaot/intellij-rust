@@ -8,10 +8,10 @@ package org.rust
 import com.intellij.findAnnotationInstance
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.TestmarkPred
 import junit.framework.TestCase
-import org.rust.lang.core.resolve2.DefMapService
+import org.rust.lang.core.resolve2.defMapService
 import org.rust.lang.core.resolve2.isNewResolveEnabled
+import org.rust.openapiext.TestmarkPred
 
 @Target(AnnotationTarget.FUNCTION, AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -31,10 +31,11 @@ fun TestmarkPred.ignoreInNewResolve(project: Project): TestmarkPred {
 }
 
 fun TestCase.setupResolveEngine(project: Project, testRootDisposable: Disposable) {
+    val defMap = project.defMapService
     findAnnotationInstance<UseNewResolve>()?.let {
-        DefMapService.setNewResolveEnabled(project, testRootDisposable, true)
+        defMap.setNewResolveEnabled(testRootDisposable, true)
     }
     findAnnotationInstance<UseOldResolve>()?.let {
-        DefMapService.setNewResolveEnabled(project, testRootDisposable, false)
+        defMap.setNewResolveEnabled(testRootDisposable, false)
     }
 }

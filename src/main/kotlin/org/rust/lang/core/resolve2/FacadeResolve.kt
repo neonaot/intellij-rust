@@ -7,12 +7,14 @@ package org.rust.lang.core.resolve2
 
 import com.intellij.extapi.psi.PsiFileBase
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.registry.Registry
+import com.intellij.openapi.util.registry.RegistryValue
 import com.intellij.openapi.vfs.VirtualFileWithId
 import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
 import com.intellij.psi.PsiElement
 import com.intellij.psi.StubBasedPsiElement
-import org.rust.cargo.project.settings.rustSettings
 import org.rust.cargo.project.workspace.PackageOrigin
+import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.refactoring.move.common.RsMoveUtil.containingModOrSelf
 import org.rust.lang.core.completion.RsMacroCompletionProvider
 import org.rust.lang.core.crate.Crate
@@ -29,11 +31,13 @@ import org.rust.lang.core.resolve.ItemProcessingMode.WITHOUT_PRIVATE_IMPORTS
 import org.rust.lang.core.resolve.ref.RsMacroPathReferenceImpl
 import org.rust.lang.core.resolve.ref.RsResolveCache
 import org.rust.lang.core.resolve2.RsModInfoBase.*
+import org.rust.openapiext.isFeatureEnabled
 import org.rust.openapiext.toPsiFile
 import org.rust.stdext.RsResult
 
+val IS_NEW_RESOLVE_ENABLED_KEY: RegistryValue = Registry.get("org.rust.resolve.new.engine")
 val Project.isNewResolveEnabled: Boolean
-    get() = rustSettings.newResolveEnabled
+    get() = IS_NEW_RESOLVE_ENABLED_KEY.asBoolean()
 
 /** null return value means that new resolve can't be used */
 fun processItemDeclarations2(
@@ -136,23 +140,17 @@ private fun ModData.processMacros(
 ): Boolean {
     val isQualified = macroPath == null || macroPath is RsPath && macroPath.qualifier != null
 
-    for ((name, perNs) in visibleItems.entriesWithName(processor.name)) {
-        for (visItem in perNs.macros) {
-            val isLegacyMacroDeclaredInSameMod = !isQualified && legacyMacros[name].orEmpty().any {
-                (!isAttrOrDerive || it is ProcMacroDefInfo) && it.path.parent == path
-            }
-            if (isLegacyMacroDeclaredInSameMod) {
-                // Resolve order for unqualified macros:
-                // - textual macros in same mod
-                // - scoped macros (imported by `use`)
-                // - textual macros
-                continue
-            }
-            val macro = visItem.scopedMacroToPsi(defMap, project) ?: continue
-            val visibilityFilter = visItem.visibility.createFilter(project)
-            if (processor(name, macro, visibilityFilter)) return true
+    val stop = processScopedMacros(processor, defMap, project) { name ->
+        val isLegacyMacroDeclaredInSameMod = !isQualified && legacyMacros[name].orEmpty().any {
+            (!isAttrOrDerive || it is ProcMacroDefInfo) && it.path.parent == path
         }
+        // Resolve order for unqualified macros:
+        // - textual macros in same mod
+        // - scoped macros (imported by `use`)
+        // - textual macros
+        !isLegacyMacroDeclaredInSameMod
     }
+    if (stop) return true
 
     if (!isQualified) {
         check(macroPath != null)
@@ -169,8 +167,29 @@ private fun ModData.processMacros(
             val macro = macroInfo.legacyMacroToPsi(macroContainingMod, macroDefMap) ?: continue
             if (processor(name, macro)) return true
         }
+
+        defMap.prelude?.let { prelude ->
+            if (prelude.processScopedMacros(processor, defMap, project)) return true
+        }
     }
 
+    return false
+}
+
+private fun ModData.processScopedMacros(
+    processor: RsResolveProcessor,
+    defMap: CrateDefMap,
+    project: Project,
+    filter: (name: String) -> Boolean = { true },
+): Boolean {
+    for ((name, perNs) in visibleItems.entriesWithName(processor.name)) {
+        for (visItem in perNs.macros) {
+            if (!filter(name)) continue
+            val macro = visItem.scopedMacroToPsi(defMap, project) ?: continue
+            val visibilityFilter = visItem.visibility.createFilter(project)
+            if (processor(name, macro, visibilityFilter)) return true
+        }
+    }
     return false
 }
 
@@ -379,7 +398,8 @@ private val RsPath.pathSegmentsAdjusted: List<String>?
                 is CantUseNewResolve -> {
                     val expandedFrom = callExpandedFrom.resolveToMacro() ?: return segments
                     val crateId = expandedFrom.containingCrate?.id ?: return segments
-                    expandedFrom.hasMacroExportLocalInnerMacros to crateId
+                    val hasMacroExportLocalInnerMacros = expandedFrom is RsMacro && expandedFrom.hasMacroExportLocalInnerMacros
+                    hasMacroExportLocalInnerMacros to crateId
                 }
                 InfoNotFound -> return segments
                 is RsModInfo -> {

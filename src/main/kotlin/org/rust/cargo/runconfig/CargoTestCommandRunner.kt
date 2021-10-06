@@ -23,6 +23,7 @@ import org.rust.cargo.runconfig.buildtool.CargoBuildManager.getBuildConfiguratio
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowEnabled
 import org.rust.cargo.runconfig.buildtool.isActivateToolWindowBeforeRun
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.saveAllDocuments
 
 class CargoTestCommandRunner : AsyncProgramRunner<RunnerSettings>() {
@@ -60,7 +61,7 @@ class CargoTestCommandRunner : AsyncProgramRunner<RunnerSettings>() {
             }
             val exitCode = AsyncPromise<Int?>()
 
-            if (environment.isActivateToolWindowBeforeRun) {
+            if (environment.isActivateToolWindowBeforeRun && !isUnitTestMode) {
                 RunContentExecutor(environment.project, buildProcessHandler)
                     .apply { createFilters(state.cargoProject).forEach { withFilter(it) } }
                     .withAfterCompletion { exitCode.setResult(buildProcessHandler.exitCode) }

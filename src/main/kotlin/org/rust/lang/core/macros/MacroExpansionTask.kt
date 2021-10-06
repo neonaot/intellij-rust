@@ -18,7 +18,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.SimpleModificationTracker
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.ex.ProgressIndicatorEx
-import com.intellij.openapiext.isDispatchThread
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.containers.ContainerUtil
@@ -50,7 +49,7 @@ import kotlin.system.measureNanoTime
 abstract class MacroExpansionTaskBase(
     project: Project,
     private val storage: ExpandedMacroStorage,
-    private val pool: Executor,
+    private val pool: ExecutorService,
     private val vfsBatchFactory: () -> MacroExpansionVfsBatch,
     private val createExpandedSearchScope: (Int) -> GlobalSearchScope,
     private val stepModificationTracker: SimpleModificationTracker

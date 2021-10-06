@@ -20,7 +20,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.util.registry.RegistryValue
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapiext.isDispatchThread
 import com.intellij.util.execution.ParametersListUtil
 import com.intellij.util.net.HttpConfigurable
 import com.intellij.util.text.SemVer
@@ -47,7 +46,10 @@ import org.rust.cargo.toolchain.impl.BuildMessages
 import org.rust.cargo.toolchain.impl.CargoMetadata
 import org.rust.cargo.toolchain.impl.CargoMetadata.replacePaths
 import org.rust.cargo.toolchain.impl.CompilerMessage
+import org.rust.cargo.toolchain.tools.ProjectDescriptionStatus.BUILD_SCRIPT_EVALUATION_ERROR
+import org.rust.cargo.toolchain.tools.ProjectDescriptionStatus.OK
 import org.rust.cargo.toolchain.tools.Rustup.Companion.checkNeedInstallClippy
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.ide.actions.InstallBinaryCrateAction
 import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.notifications.showBalloon
@@ -131,14 +133,21 @@ class Cargo(toolchain: RsToolchainBase, useWrapper: Boolean = false)
     fun fullProjectDescription(
         owner: Project,
         projectDirectory: Path,
-        listener: ProcessListener? = null
-    ): CargoWorkspaceData {
-        val rawData = fetchMetadata(owner, projectDirectory, listener)
-        val buildScriptsInfo = fetchBuildScriptsInfo(owner, projectDirectory, listener)
+        listenerProvider: (CargoCallType) -> ProcessListener? = { null }
+    ): ProjectDescription {
+        val rawData = fetchMetadata(owner, projectDirectory, listenerProvider(CargoCallType.METADATA))
+
+        val (buildScriptsInfo, status) = if (isFeatureEnabled(RsExperiments.EVALUATE_BUILD_SCRIPTS)) {
+            val info = fetchBuildScriptsInfo(owner, projectDirectory, listenerProvider(CargoCallType.BUILD_SCRIPT_CHECK))
+            if (info == null) info to BUILD_SCRIPT_EVALUATION_ERROR else info to OK
+        } else {
+            null to OK
+        }
 
         val (rawDataAdjusted, buildScriptsInfoAdjusted) =
             replacePathsSymlinkIfNeeded(rawData, buildScriptsInfo, projectDirectory)
-        return CargoMetadata.clean(rawDataAdjusted, buildScriptsInfoAdjusted)
+        val workspaceData = CargoMetadata.clean(rawDataAdjusted, buildScriptsInfoAdjusted)
+        return ProjectDescription(workspaceData, status)
     }
 
     @Throws(ExecutionException::class)
@@ -164,10 +173,11 @@ class Cargo(toolchain: RsToolchainBase, useWrapper: Boolean = false)
     fun vendorDependencies(
         owner: Project,
         projectDirectory: Path,
-        dstPath: Path
+        dstPath: Path,
+        listener: ProcessListener? = null
     ) {
         val commandLine = CargoCommandLine("vendor", projectDirectory, listOf(dstPath.toString()))
-        commandLine.execute(owner)
+        commandLine.execute(owner, listener = listener)
     }
 
     /**
@@ -192,9 +202,8 @@ class Cargo(toolchain: RsToolchainBase, useWrapper: Boolean = false)
         projectDirectory: Path,
         listener: ProcessListener?
     ): BuildMessages? {
-        if (!isFeatureEnabled(RsExperiments.EVALUATE_BUILD_SCRIPTS)) return null
         val additionalArgs = listOf("--message-format", "json")
-        val nativeHelper = RsPathManager.nativeHelper()
+        val nativeHelper = RsPathManager.nativeHelper(toolchain is RsWslToolchain)
         val envs = if (nativeHelper != null && Registry.`is`("org.rust.cargo.evaluate.build.scripts.wrapper")) {
             EnvironmentVariablesData.create(mapOf(RUSTC_WRAPPER to nativeHelper.toString()), true)
         } else {
@@ -204,17 +213,21 @@ class Cargo(toolchain: RsToolchainBase, useWrapper: Boolean = false)
         val commandLine = CargoCommandLine("check", projectDirectory, additionalArgs, environmentVariables = envs)
 
         val processOutput = try {
-            commandLine.execute(owner, listener = listener)
+            commandLine.execute(owner, ignoreExitCode = true, listener = listener)
         } catch (e: ExecutionException) {
             LOG.warn(e)
             return null
         }
 
+        if (processOutput.exitCode != 0) return null
+
         val messages = mutableMapOf<PackageId, MutableList<CompilerMessage>>()
 
         for (line in processOutput.stdoutLines) {
             val jsonObject = tryParseJsonObject(line) ?: continue
-            CompilerMessage.fromJson(jsonObject)?.let { messages.getOrPut(it.package_id) { mutableListOf() } += it }
+            CompilerMessage.fromJson(jsonObject)
+                ?.convertPaths(toolchain::toLocalPath)
+                ?.let { messages.getOrPut(it.package_id) { mutableListOf() } += it }
         }
         return BuildMessages(messages)
     }
@@ -518,7 +531,7 @@ class Cargo(toolchain: RsToolchainBase, useWrapper: Boolean = false)
 
         fun checkNeedInstallCargoExpand(project: Project): Boolean {
             val crateName = "cargo-expand"
-            val minVersion = SemVer("v0.4.9", 0, 4, 9)
+            val minVersion = SemVer("v1.0.0", 1, 0, 0)
             return checkNeedInstallBinaryCrate(
                 project,
                 crateName,
@@ -622,4 +635,19 @@ sealed class CargoCheckArgs {
             )
         }
     }
+}
+
+enum class CargoCallType {
+    METADATA,
+    BUILD_SCRIPT_CHECK
+}
+
+data class ProjectDescription(
+    val workspaceData: CargoWorkspaceData,
+    val status: ProjectDescriptionStatus
+)
+
+enum class ProjectDescriptionStatus {
+    BUILD_SCRIPT_EVALUATION_ERROR,
+    OK
 }

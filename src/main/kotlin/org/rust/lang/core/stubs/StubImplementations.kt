@@ -67,7 +67,7 @@ class RsFileStub(
     override fun getType() = Type
 
     object Type : IStubFileElementType<RsFileStub>(RsLanguage) {
-        private const val STUB_VERSION = 216
+        private const val STUB_VERSION = 218
 
         // Bump this number if Stub structure changes
         override fun getStubVersion(): Int = RustParserDefinition.PARSER_VERSION + STUB_VERSION
@@ -254,7 +254,7 @@ fun factory(name: String): RsStubElementType<*, *> = when (name) {
     "BASE_TYPE" -> RsBaseTypeStub.Type
     "FOR_IN_TYPE" -> RsPlaceholderStub.Type("FOR_IN_TYPE", ::RsForInTypeImpl)
     "TRAIT_TYPE" -> RsTraitTypeStub.Type
-    "MACRO_TYPE" -> RsPlaceholderStub.Type("MACRO_TYPE", ::RsForInTypeImpl)
+    "MACRO_TYPE" -> RsPlaceholderStub.Type("MACRO_TYPE", ::RsMacroTypeImpl)
 
     "VALUE_PARAMETER_LIST" -> RsPlaceholderStub.Type("VALUE_PARAMETER_LIST", ::RsValueParameterListImpl)
     "VALUE_PARAMETER" -> RsValueParameterStub.Type
@@ -1538,6 +1538,7 @@ class RsMacro2Stub(
     override val name: String?,
     val macroBody: String,
     val bodyHash: HashCode,
+    val preferredBraces: MacroBraces,
     override val flags: Int
 ) : RsAttributeOwnerStubBase<RsMacro2>(parent, elementType),
     RsNamedStub {
@@ -1553,6 +1554,7 @@ class RsMacro2Stub(
                 dataStream.readNameAsString(),
                 dataStream.readUTFFast(),
                 dataStream.readHashCode(),
+                dataStream.readEnum(),
                 dataStream.readUnsignedByte()
             )
 
@@ -1561,6 +1563,7 @@ class RsMacro2Stub(
                 writeName(stub.name)
                 writeUTFFast(stub.macroBody)
                 writeHashCode(stub.bodyHash)
+                writeEnum(stub.preferredBraces)
                 writeByte(stub.flags)
             }
 
@@ -1572,7 +1575,8 @@ class RsMacro2Stub(
             flags = BitUtil.set(flags, HAS_RUSTC_BUILTIN_MACRO, MACRO2_HAS_RUSTC_BUILTIN_MACRO_PROP.getDuringIndexing(psi))
             val body = psi.prepareMacroBody()
             val bodyHash = HashCode.compute(body)
-            return RsMacro2Stub(parentStub, this, psi.name, body, bodyHash, flags)
+            val preferredBraces = psi.preferredBraces
+            return RsMacro2Stub(parentStub, this, psi.name, body, bodyHash, preferredBraces, flags)
         }
 
         override fun indexStub(stub: RsMacro2Stub, sink: IndexSink) = sink.indexMacroDef(stub)
@@ -1598,7 +1602,7 @@ class RsMacroCallStub(
         override fun shouldCreateStub(node: ASTNode): Boolean {
             val parent = node.treeParent.elementType
             return parent in RS_MOD_OR_FILE || parent == MEMBERS ||
-                (parent == MACRO_EXPR || parent == BLOCK) && createStubIfParentIsStub(node)
+                (parent == MACRO_EXPR || parent == MACRO_TYPE || parent == BLOCK) && createStubIfParentIsStub(node)
         }
 
         override fun deserialize(dataStream: StubInputStream, parentStub: StubElement<*>?) =

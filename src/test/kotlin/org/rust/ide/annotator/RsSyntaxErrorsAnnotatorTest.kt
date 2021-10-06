@@ -248,21 +248,13 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         fn foo<const C: usize, <error descr="Lifetime parameters must be declared prior to const parameters">'a</error>>(bar: &'a usize) {}
     """)
 
-    @MockRustcVersion("1.51.0-nightly")
-    fun `test type params after const params (old)`() = checkErrors("""
-        #![feature(min_const_generics)]
-        fn foo<const C: usize, <error descr="Type parameters must be declared prior to const parameters">T</error>>(bar: T) {}
-    """)
-
     @MockRustcVersion("1.34.0-nightly")
     fun `test type params after const params (new)`() = checkErrors("""
-        #![feature(const_generics)]
         fn foo<const C: usize, T>(bar: T) {}
     """)
 
     @MockRustcVersion("1.34.0-nightly")
     fun `test type arguments order`() = checkErrors("""
-        #![feature(const_generics)]
         type A1 = B<C, <error descr="Lifetime arguments must be declared prior to type arguments">'d</error>>;
 
         type A2 = B<C, <error descr="Lifetime arguments must be declared prior to type arguments">'d</error>,
@@ -386,5 +378,44 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         <error descr="Missing type for `const` item">const MY_CONST = 1;</error>
         <error descr="Missing type for `static` item">static MY_STATIC = 1;</error>
         const PARTIAL_TYPE:<error descr="<type> expected, got '='"> </error> = 1;
+    """)
+
+    fun `test extern abi`() = checkErrors("""
+        extern fn extern_fn() {}
+        extern "C" fn extern_c_fn() {}
+        extern "R\x75st" fn extern_fn_with_escape_in_abi() {}
+        extern r"system" fn extern_fn_with_raw_abi() {}
+        extern <error descr="Non-string ABI literal">1</error> fn extern_fn_with_invalid_abi() {}
+
+        extern {}
+        extern "C" {}
+        extern "R\u{0075}st" {}
+        extern r"system" {}
+        extern <error descr="Non-string ABI literal">'C'</error> {}
+
+        type ExternFn = extern fn();
+        type ExternCFn = extern "C" fn();
+        type ExternFnWithEscapeInAbi = extern "R\x75st" fn();
+        type ExternFnWithRawAbi = extern r"system" fn();
+        type ExternFnWithInvalidAbi = extern <error descr="Non-string ABI literal">true</error> fn();
+    """)
+
+    fun `test unsafe module`() = checkErrors("""
+        mod module {}
+        pub mod pub_module {}
+        <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_module {}
+        pub <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_module {}
+
+        mod mod_delc;
+        pub mod pub_mmod_delc;
+        <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_mod_delc;
+        pub <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_mod_delc;
+    """)
+
+    fun `test unsafe extern block`() = checkErrors("""
+        extern {}
+        extern "C" {}
+        <error descr="Extern block cannot be declared unsafe">unsafe</error> extern {}
+        <error descr="Extern block cannot be declared unsafe">unsafe</error> extern "Rust" {}
     """)
 }
