@@ -1,5 +1,5 @@
 import argparse
-from github78 import Github
+from github import Github
 
 DOC_LABEL = "To be documented"
 DOC_MSG = "this message was sent automatically."
