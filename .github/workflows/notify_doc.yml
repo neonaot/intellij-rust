@@ -1,0 +1,27 @@
+name: notifier for docteam
+
+on:
+    pull_request_target:
+        types: [labeled, closed]
+
+jobs:
+        build:
+            runs-on: ubuntu-latest
+
+            steps:
+                - name: checkout repo content
+                  uses: actions/checkout@v2
+
+                - name: setup python
+                  uses: actions/setup-python@v2
+                  with:
+                      python-version: 3.9
+
+                - name: Install python packages 1 #TODO
+                  run: pip install argparse
+                - name: Install python packages 2
+                  run: pip install PyGithub
+
+                - name: execute py script
+                  run: python scripts/with_pygithub/notifier.py --token ${{ secrets.MY_TOKEN }} --event ${{ github.event.action }} --pr_id ${{ github.event.pull_request.number }} --label "${{ github.event.label.name }}" --repo ${{ github.repository }}
+
