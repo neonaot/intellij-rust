@@ -24,4 +24,4 @@ jobs:
 
                 - name: execute py script
                   run: python scripts/notifier.py --token ${{ secrets.MY_TOKEN }} --event labeling --pr_id 13 --label TODO
-                  uses:  ${{ secrets.MY_TOKEN }}
+
