@@ -2,7 +2,7 @@ name: notifier for docteam
 
 on:
     pull_request_target:
-        types: [labeled]
+        types: [labeled, closed]
 
 jobs:
         build:
