@@ -19,16 +19,12 @@ if __name__ == '__main__':
     g = Github(args.token)
     repo = g.get_repo("neonaot/intellij-rust") #TODO
 
-    if args.event == "closed":
-        print("logs: pr was closed")
-        if DOC_LABEL in [i.name for i in repo.get_pull(args.pr_id).labels]:
-            print("logs: pr has needed label")
+    if args.event == "closed" and  DOC_LABEL in [i.name for i in repo.get_pull(args.pr_id).labels]:
+            print("logs: pr is closed and has needed label")
             repo.get_issue(args.pr_id).create_comment(DOC_MSG)
-    elif args.event == "labeled" and args.label == DOC_LABEL:
-        print("logs: pr was labeled")
-        if repo.get_pull(args.pr_id).is_merged():
-            print("logs: pr is merged")
+    elif args.event == "labeled" and args.label == DOC_LABEL  and repo.get_pull(args.pr_id).is_merged():
+            print("logs: new label in merged pr ")
             repo.get_issue(args.pr_id).create_comment(DOC_MSG)
     else:
-        print("wrong event type, very strange")
+        print("we dont need here")
 
