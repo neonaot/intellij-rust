@@ -19,7 +19,7 @@ if __name__ == '__main__':
 
 
     g = Github(args.token)
-    repo = g.get_repo("neonaot/intellij-rust") #TODO
+    repo = g.get_repo("neonaot/intellij-rust") #TODO change repo, add extra argument?
 
     if args.event == "closed" and DOC_LABEL in [i.name for i in repo.get_pull(args.pr_id).labels]:
             print("logs: pr is closed and has needed label")
