@@ -2,7 +2,7 @@ import argparse
 from github import Github
 
 DOC_LABEL = "To be documented"
-DOC_MSG = "this message was sent automatically."
+DOC_MSG = "this message was sent automatically." # TODO change it
 
 
 if __name__ == '__main__':
@@ -15,11 +15,13 @@ if __name__ == '__main__':
     parser.add_argument("--rep", type=str)
     args = parser.parse_args()
 
+    print("label = ", args.label)
+
 
     g = Github(args.token)
     repo = g.get_repo("neonaot/intellij-rust") #TODO
 
-    if args.event == "closed" and  DOC_LABEL in [i.name for i in repo.get_pull(args.pr_id).labels]:
+    if args.event == "closed" and DOC_LABEL in [i.name for i in repo.get_pull(args.pr_id).labels]:
             print("logs: pr is closed and has needed label")
             repo.get_issue(args.pr_id).create_comment(DOC_MSG)
     elif args.event == "labeled" and args.label == DOC_LABEL  and repo.get_pull(args.pr_id).is_merged():
