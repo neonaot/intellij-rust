@@ -23,7 +23,7 @@ jobs:
               run: pip install bs4
 
             - name: Install urllib
-              run: pip install urllib
+              run: pip install urllib3
 
             - name: Execute py script
               run: python scripts/with_pygithub/check_tracking_issue.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
