@@ -2,7 +2,7 @@ name: supported errors
 
 on:
     schedule:
-        - '15 * * * *
+        - cron: '15 * * * *'
 
 jobs:
     build:
