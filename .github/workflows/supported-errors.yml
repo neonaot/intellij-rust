@@ -2,7 +2,7 @@ name: supported errors
 
 on:
     schedule:
-        - cron: '15 * * * *'
+        - cron: '5 * * * *'
 
 jobs:
     check-supported-errors:
