@@ -2,7 +2,7 @@ name: supported errors
 
 on:
     schedule:
-        - cron: '5 * * * *'
+        - cron: '30 * * * *'
 
 jobs:
     check-supported-errors:
@@ -21,4 +21,5 @@ jobs:
 
             - name: Analyze errors and create an issue
               run: python scripts/check_tracking_issue.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
+
                  --repo ${{ github.repository }}
