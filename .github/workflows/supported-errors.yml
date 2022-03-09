@@ -20,5 +20,5 @@ jobs:
               run: pip install -r scripts/requirements.txt
 
             - name: Analyze errors and create an issue
-              run: python scripts/with_pygithub/check_tracking_issue.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
+              run: python scripts/check_tracking_issue.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
                  --repo ${{ github.repository }}
