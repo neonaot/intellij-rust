@@ -39,6 +39,16 @@ class RsMacroGraphWalkerTest : RsTestBase() {
         }
     """, hashSetOf(FragmentKind.Expr, FragmentKind.Ident))
 
+    fun `test simple (macro 2)`() = check("""
+        macro my_macro($ e:expr) {
+            1
+        }
+
+        fn main() {
+            my_macro!(x/*caret*/);
+        }
+    """, hashSetOf(FragmentKind.Expr))
+
     fun `test complex expr`() = check("""
         macro_rules! my_macro {
             ($ e:expr) => (1);
@@ -49,7 +59,7 @@ class RsMacroGraphWalkerTest : RsTestBase() {
         }
     """, hashSetOf(FragmentKind.Expr))
 
-    fun `test ident repetition *`() = check("""
+    fun `test ident zero-or-more repetition`() = check("""
         macro_rules! my_macro {
             ($ ($ id:ident)* $ t:ty) => (1);
         }
@@ -69,7 +79,7 @@ class RsMacroGraphWalkerTest : RsTestBase() {
         }
     """, hashSetOf(FragmentKind.Ident))
 
-    fun `test ident repetition ?`() = check("""
+    fun `test ident option repetition`() = check("""
         macro_rules! my_macro {
             ($ ($ id:ident)? $ t:ty) => (1);
         }

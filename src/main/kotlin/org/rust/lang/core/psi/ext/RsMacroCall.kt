@@ -13,6 +13,9 @@ import com.intellij.psi.stubs.IStubElementType
 import com.intellij.psi.tree.TokenSet
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.project.workspace.PackageOrigin
+import org.rust.cargo.toolchain.RsToolchainBase
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.macros.MacroExpansionContext
 import org.rust.lang.core.macros.RsExpandedElement
@@ -20,9 +23,10 @@ import org.rust.lang.core.macros.expansionContext
 import org.rust.lang.core.macros.findMacroCallExpandedFrom
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.RsElementTypes.*
-import org.rust.lang.core.resolve.DEFAULT_RECURSION_LIMIT
+import org.rust.lang.core.resolve2.getRecursionLimit
 import org.rust.lang.core.stubs.RsMacroCallStub
 import org.rust.openapiext.findFileByMaybeRelativePath
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.toPsiFile
 import org.rust.stdext.HashCode
 
@@ -48,7 +52,7 @@ val RsMacroCall.macroName: String
     get() = path.referenceName.orEmpty() // TODO return null if `referenceName` is null
 
 val RsMacroCall.isTopLevelExpansion: Boolean
-    get() = parent is RsMod || parent is RsMembers
+    get() = parent is RsMod
 
 val RsMacroCall.bracesKind: MacroBraces?
     get() = macroArgumentElement?.firstChild?.let { MacroBraces.fromToken(it.elementType) }
@@ -114,7 +118,10 @@ private fun RsExpr.getValue(crateOrNull: Crate?): String? {
                     val crate = crateOrNull ?: expr.containingCrate ?: return null
                     when (val variableName = expr.getValue(crate)) {
                         "OUT_DIR" -> crate.outDir?.path
-                        else -> crate.env[variableName]
+                        else -> {
+                            val toolchain = if (isUnitTestMode) RsToolchainBase.suggest() else crate.project.toolchain
+                            crate.env[variableName]?.let { toolchain?.toLocalPath(it) }
+                        }
                     }
                 }
                 else -> null
@@ -149,8 +156,8 @@ val RsMacroCall.bodyHash: HashCode?
         }
     }
 
-fun RsMacroCall.resolveToMacro(): RsMacro? =
-    path.reference?.resolve() as? RsMacro
+fun RsMacroCall.resolveToMacro(): RsMacroDefinitionBase? =
+    path.reference?.resolve() as? RsMacroDefinitionBase
 
 val RsMacroCall.expansionFlatten: List<RsExpandedElement>
     get() {
@@ -162,17 +169,20 @@ val RsMacroCall.expansionFlatten: List<RsExpandedElement>
         return list
     }
 
-fun RsMacroCall.processExpansionRecursively(processor: (RsExpandedElement) -> Boolean): Boolean =
-    processExpansionRecursively(processor, 0)
+fun RsMacroCall.processExpansionRecursively(recursionLimit: Int, processor: (RsExpandedElement) -> Boolean): Boolean =
+    processExpansionRecursively(processor, recursionLimit)
 
-private fun RsMacroCall.processExpansionRecursively(processor: (RsExpandedElement) -> Boolean, depth: Int): Boolean {
-    if (depth > DEFAULT_RECURSION_LIMIT) return true
-    return expansion?.elements.orEmpty().any { it.processRecursively(processor, depth) }
+fun RsMacroCall.processExpansionRecursively(processor: (RsExpandedElement) -> Boolean): Boolean =
+    processExpansionRecursively(processor, getRecursionLimit(this))
+
+private fun RsMacroCall.processExpansionRecursively(processor: (RsExpandedElement) -> Boolean, recursionLimit: Int): Boolean {
+    if (recursionLimit == 0) return true
+    return expansion?.elements.orEmpty().any { it.processRecursively(processor, recursionLimit) }
 }
 
-private fun RsExpandedElement.processRecursively(processor: (RsExpandedElement) -> Boolean, depth: Int): Boolean {
+private fun RsExpandedElement.processRecursively(processor: (RsExpandedElement) -> Boolean, recursionLimit: Int): Boolean {
     return when (this) {
-        is RsMacroCall -> existsAfterExpansionSelf && processExpansionRecursively(processor, depth + 1)
+        is RsMacroCall -> existsAfterExpansionSelf && processExpansionRecursively(processor, recursionLimit - 1)
         else -> processor(this)
     }
 }
@@ -188,3 +198,6 @@ fun RsMacroCall.replaceWithExpr(expr: RsExpr): RsElement {
         else -> error("`replaceWithExpr` can only be used for expr or stmt context macros; got $context context")
     } as RsElement
 }
+
+val RsMacroCall.isStdTryMacro
+    get() = macroName == "try" && resolveToMacro()?.containingCargoPackage?.origin == PackageOrigin.STDLIB

@@ -5,11 +5,10 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.AnnotatorBase
+import com.intellij.codeInspection.util.InspectionMessage
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import org.rust.ide.colors.RsColor
 import org.rust.lang.core.psi.*
@@ -18,6 +17,7 @@ import org.rust.lang.core.types.ty.TyPointer
 import org.rust.lang.core.types.type
 import org.rust.lang.utils.RsDiagnostic
 import org.rust.lang.utils.addToHolder
+import org.rust.openapiext.isUnitTestMode
 
 class RsUnsafeExpressionAnnotator : AnnotatorBase() {
     override fun annotateInternal(element: PsiElement, holder: AnnotationHolder) {
@@ -36,7 +36,7 @@ class RsUnsafeExpressionAnnotator : AnnotatorBase() {
     private fun annotateUnsafeCall(expr: RsExpr, holder: RsAnnotationHolder) {
         if (!expr.existsAfterExpansion) return
 
-        if (expr.isInUnsafeBlockOrFn(/* skip the expression itself*/ 1)) {
+        if (expr.isInUnsafeContext) {
             val textRange = when (expr) {
                 is RsCallExpr -> when (val callee = expr.expr) {
                     is RsPathExpr -> callee.path.textRangeOfLastSegment ?: return
@@ -61,7 +61,7 @@ class RsUnsafeExpressionAnnotator : AnnotatorBase() {
             else -> return
         }
 
-        if (expr.isInUnsafeBlockOrFn()) {
+        if (expr.isInUnsafeContext) {
             val textRange = expr.path.textRangeOfLastSegment ?: return
             holder.holder.createUnsafeAnnotation(textRange, "Use of unsafe $constantType static")
         } else {
@@ -98,7 +98,7 @@ class RsUnsafeExpressionAnnotator : AnnotatorBase() {
         val mul = element.mul ?: return // operatorType != UnaryOperator.DEREF
         if (element.expr?.type !is TyPointer) return
 
-        if (element.isInUnsafeBlockOrFn()) {
+        if (element.isInUnsafeContext) {
             holder.holder.createUnsafeAnnotation(mul.textRange, "Unsafe dereference of raw pointer")
         } else {
             RsDiagnostic.UnsafeError(element, "Dereference of raw pointer requires unsafe function or block")
@@ -113,7 +113,7 @@ class RsUnsafeExpressionAnnotator : AnnotatorBase() {
         if (UNSAFE_MACRO_LIST.contains(macroName)) {
             val macroDef = macroCall.resolveToMacro()
 
-            if (macroDef != null && macroDef.hasRustcBuiltinMacro && !macroCall.isInUnsafeBlockOrFn()) {
+            if (macroDef != null && macroDef.hasRustcBuiltinMacro && !macroExpr.isInUnsafeContext) {
                 RsDiagnostic.UnsafeError(
                     macroExpr,
                     "use of `$macroName!()` is unsafe and requires unsafe function or block"
@@ -122,21 +122,7 @@ class RsUnsafeExpressionAnnotator : AnnotatorBase() {
         }
     }
 
-    private fun PsiElement.isInUnsafeBlockOrFn(ancestorsToSkip: Int = 0): Boolean {
-        val parent = this.ancestors
-            .drop(ancestorsToSkip)
-            .find {
-                when (it) {
-                    is RsBlockExpr -> it.isUnsafe
-                    is RsFunction -> true
-                    else -> false
-                }
-            } ?: return false
-
-        return parent is RsBlockExpr || (parent is RsFunction && parent.isActuallyUnsafe)
-    }
-
-    private fun AnnotationHolder.createUnsafeAnnotation(textRange: TextRange, message: String) {
+    private fun AnnotationHolder.createUnsafeAnnotation(textRange: TextRange, @InspectionMessage message: String) {
         if (isBatchMode) return
         val color = RsColor.UNSAFE_CODE
         val severity = if (isUnitTestMode) color.testSeverity else HighlightSeverity.INFORMATION

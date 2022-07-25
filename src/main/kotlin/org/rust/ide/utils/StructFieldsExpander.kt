@@ -30,7 +30,7 @@ fun addMissingFieldsToStructLiteral(
         body,
         declaration.fields,
         fieldsToAdd,
-        structLiteral.getVisibleBindings()
+        structLiteral.getLocalVariableVisibleBindings()
     )
     editor?.buildAndRunTemplate(body, addedFields.mapNotNull { it.expr?.createSmartPointer() })
 }
@@ -43,7 +43,7 @@ fun expandStructFields(factory: RsPsiFactory, patStruct: RsPatStruct) {
     val bodyFieldNames = existingFields.map { it.kind.fieldName }.toSet()
     val missingFields = declaration.fields
         .filter { it.name !in bodyFieldNames }
-        .map { factory.createPatField(it.name!!) }
+        .map { factory.createPatField(it.name!!.escapeIdentifierIfNeeded()) }
 
     if (existingFields.isEmpty()) {
         addFieldsToPat(factory, patStruct, missingFields, hasTrailingComma)

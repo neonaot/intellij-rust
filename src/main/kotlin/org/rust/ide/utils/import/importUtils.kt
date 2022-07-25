@@ -5,56 +5,32 @@
 
 package org.rust.ide.utils.import
 
-import com.intellij.openapiext.Testmark
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.util.AutoInjectedCrates
 import org.rust.ide.injected.isDoctestInjection
+import org.rust.ide.refactoring.RsImportOptimizer.Companion.sortUseSpecks
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.macros.setContext
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
+import org.rust.lang.core.stubs.index.RsIncludeMacroIndex
+import org.rust.openapiext.Testmark
 import org.rust.openapiext.checkWriteAccessAllowed
+import org.rust.stdext.isSortedWith
 
 /**
  * Inserts a use declaration to the mod where [context] located for importing the selected candidate ([this]).
  * This action requires write access.
  */
-fun ImportCandidate.import(context: RsElement) {
+fun ImportCandidate.import(context: RsElement) = info.import(context)
+
+fun ImportInfo.import(context: RsElement) {
     checkWriteAccessAllowed()
     val psiFactory = RsPsiFactory(context.project)
-    // depth of `mod` relative to module with `extern crate` item
-    // we uses this info to create correct relative use item path if needed
-    var relativeDepth: Int? = null
 
-    val isAtLeastEdition2018 = context.isAtLeastEdition2018
-    val info = info
-    // if crate of importing element differs from current crate
-    // we need to add new extern crate item
-    if (info is ImportInfo.ExternCrateImportInfo) {
-        val crate = info.crate
-        val crateRoot = context.crateRoot
-        val attributes = crateRoot?.stdlibAttributes ?: RsFile.Attributes.NONE
-        when {
-            // but if crate of imported element is `std` and there aren't `#![no_std]` and `#![no_core]`
-            // we don't add corresponding extern crate item manually
-            // because it will be done by compiler implicitly
-            attributes == RsFile.Attributes.NONE && crate.isStd -> Testmarks.autoInjectedStdCrate.hit()
-            // if crate of imported element is `core` and there is `#![no_std]`
-            // we don't add corresponding extern crate item manually for the same reason
-            attributes == RsFile.Attributes.NO_STD && crate.isCore -> Testmarks.autoInjectedCoreCrate.hit()
-            else -> {
-                if (info.needInsertExternCrateItem && !isAtLeastEdition2018) {
-                    crateRoot?.insertExternCrateItem(psiFactory, info.externCrateName)
-                } else {
-                    if (info.depth != null) {
-                        Testmarks.externCrateItemInNotCrateRoot.hit()
-                        relativeDepth = info.depth
-                    }
-                }
-            }
-        }
-    }
-    val prefix = when (relativeDepth) {
+    // depth of `mod` relative to module with `extern crate` item
+    // we use this info to create correct relative use item path if needed
+    val prefix = when (val relativeDepth = insertExternCrateIfNeeded(context)) {
         null -> ""
         0 -> "self::"
         else -> "super::".repeat(relativeDepth)
@@ -66,19 +42,52 @@ fun ImportCandidate.import(context: RsElement) {
             // In doctest injections all our code is located inside one invisible (main) function.
             // If we try to change PSI outside of that function, we'll take a crash.
             // So here we limit the module search with the last function (and never inert to an RsFile)
-            Testmarks.doctestInjectionImport.hit()
+            Testmarks.DoctestInjectionImport.hit()
             val scope = context.ancestors.find { it is RsMod && it !is RsFile }
                 ?: context.ancestors.findLast { it is RsFunction }
             ((scope as? RsFunction)?.block ?: scope) as RsItemsOwner
         }
         containingFile is RsCodeFragment -> containingFile.importTarget
+        containingFile is RsFile && RsIncludeMacroIndex.getIncludedFrom(containingFile) != null -> containingFile
         else -> null
     } ?: context.containingMod
-    insertionScope.insertUseItem(psiFactory, "$prefix${info.usePath}")
+    insertionScope.insertUseItem(psiFactory, "$prefix$usePath")
 }
 
+/**
+ * Inserts an `extern crate` item if the crate of importing element differs from the crate of `context`.
+ * Returns the relative depth of context `mod` relative to module with `extern crate` item.
+ */
+fun ImportInfo.insertExternCrateIfNeeded(context: RsElement): Int? {
+    if (this is ImportInfo.ExternCrateImportInfo) {
+        val crateRoot = context.crateRoot
+        val attributes = crateRoot?.stdlibAttributes ?: RsFile.Attributes.NONE
+        when {
+            // but if crate of imported element is `std` and there aren't `#![no_std]` and `#![no_core]`
+            // we don't add corresponding extern crate item manually
+            // because it will be done by compiler implicitly
+            attributes == RsFile.Attributes.NONE && crate.isStd -> Testmarks.AutoInjectedStdCrate.hit()
+            // if crate of imported element is `core` and there is `#![no_std]`
+            // we don't add corresponding extern crate item manually for the same reason
+            attributes == RsFile.Attributes.NO_STD && crate.isCore -> Testmarks.AutoInjectedCoreCrate.hit()
+            else -> {
+                if (needInsertExternCrateItem) {
+                    crateRoot?.insertExternCrateItem(RsPsiFactory(context.project), externCrateName)
+                } else {
+                    if (depth != null) {
+                        Testmarks.ExternCrateItemInNotCrateRoot.hit()
+                        return depth
+                    }
+                }
+            }
+        }
+    }
+    return null
+}
+
+
 private fun RsMod.insertExternCrateItem(psiFactory: RsPsiFactory, crateName: String) {
-    val externCrateItem = psiFactory.createExternCrateItem(crateName)
+    val externCrateItem = psiFactory.createExternCrateItem(crateName.escapeIdentifierIfNeeded())
     val lastExternCrateItem = childrenOfType<RsExternCrateItem>().lastElement
     if (lastExternCrateItem != null) {
         addAfter(externCrateItem, lastExternCrateItem)
@@ -90,24 +99,18 @@ private fun RsMod.insertExternCrateItem(psiFactory: RsPsiFactory, crateName: Str
 
 fun RsItemsOwner.insertUseItem(psiFactory: RsPsiFactory, usePath: String) {
     val useItem = psiFactory.createUseItem(usePath)
+    useItem.setContext(containingMod)  // needed for correct sorting of added import
     insertUseItem(psiFactory, useItem)
 }
 
 fun RsItemsOwner.insertUseItem(psiFactory: RsPsiFactory, useItem: RsUseItem) {
     if (tryGroupWithOtherUseItems(psiFactory, useItem)) return
-    val anchor = childrenOfType<RsUseItem>().lastElement ?: childrenOfType<RsExternCrateItem>().lastElement
-    if (anchor != null) {
-        val insertedUseItem = addAfter(useItem, anchor)
-        if (anchor is RsExternCrateItem || isDoctestInjection) {
-            // Formatting is disabled in injections, so we have to add new line manually
-            Testmarks.insertNewLineBeforeUseItem.hit()
-            addBefore(psiFactory.createNewline(), insertedUseItem)
-        }
-    } else {
-        // `if` is needed to support adding import to empty inline mod (see `RsCodeFragment#importTarget`)
-        addBefore(useItem, if (this is RsModItem && itemsAndMacros.none()) rbrace else firstItem)
-        addAfter(psiFactory.createNewline(), firstItem)
-    }
+    if (tryInsertUseItemAtCorrectLocation(this, useItem)) return
+
+    // else handle case when mod is empty or has no `use`s / `extern crate`s
+    // `if` is needed to support adding import to empty inline mod (see `RsCodeFragment#importTarget`)
+    addBefore(useItem, if (this is RsModItem && itemsAndMacros.none()) rbrace else firstItem)
+    addAfter(psiFactory.createNewline(), firstItem)
 }
 
 private fun RsItemsOwner.tryGroupWithOtherUseItems(psiFactory: RsPsiFactory, newUseItem: RsUseItem): Boolean {
@@ -129,7 +132,40 @@ private fun RsUseItem.tryGroupWith(
     val newUsePath = parentPath.joinToString("::", postfix = "::") +
         (importingNames + newImportingName).joinToString(", ", "{", "}")
     val newUseSpeck = psiFactory.createUseSpeck(newUsePath)
+
+    val isUseSpeckSorted = useSpeck?.useGroup?.useSpeckList?.isSortedWith(COMPARATOR_FOR_SPECKS_IN_USE_GROUP) ?: true
+    if (isUseSpeckSorted) {
+        newUseSpeck.useGroup?.sortUseSpecks()
+    }
+
     useSpeck?.replace(newUseSpeck)
+    return true
+}
+
+private fun tryInsertUseItemAtCorrectLocation(mod: RsItemsOwner, useItem: RsUseItem): Boolean {
+    val newline = RsPsiFactory(mod.project).createNewline()
+    val uses = mod.childrenOfType<RsUseItem>().map(::UseItemWrapper)
+    if (uses.isEmpty()) {
+        val anchor = mod.childrenOfType<RsExternCrateItem>().lastOrNull() ?: return false
+        mod.addBefore(newline, mod.addAfter(useItem, anchor))
+        return true
+    }
+
+    val useWrapper = UseItemWrapper(useItem)
+    val (less, greater) = uses.partition { it < useWrapper }
+    val anchorBefore = less.lastOrNull()
+    val anchorAfter = greater.firstOrNull()
+    when {
+        anchorBefore != null -> {
+            val addedItem = mod.addAfter(useItem, anchorBefore.useItem)
+            mod.addBefore(newline, addedItem)
+        }
+        anchorAfter != null -> {
+            val addedItem = mod.addBefore(useItem, anchorAfter.useItem)
+            mod.addAfter(newline, addedItem)
+        }
+        else -> error("unreachable")
+    }
     return true
 }
 
@@ -170,11 +206,11 @@ val Crate.isCore: Boolean
     get() = origin == PackageOrigin.STDLIB && normName == AutoInjectedCrates.CORE
 
 object Testmarks {
-    val autoInjectedStdCrate = Testmark("autoInjectedStdCrate")
-    val autoInjectedCoreCrate = Testmark("autoInjectedCoreCrate")
-    val externCrateItemInNotCrateRoot = Testmark("externCrateItemInNotCrateRoot")
-    val doctestInjectionImport = Testmark("doctestInjectionImport")
-    val insertNewLineBeforeUseItem = Testmark("insertNewLineBeforeUseItem")
+    object AutoInjectedStdCrate : Testmark()
+    object AutoInjectedCoreCrate : Testmark()
+    object ExternCrateItemInNotCrateRoot : Testmark()
+    object DoctestInjectionImport : Testmark()
+    object IgnorePrivateImportInParentMod : Testmark()
 }
 
 /**

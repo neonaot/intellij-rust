@@ -5,11 +5,8 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.BatchMode
-import org.rust.MockRustcVersion
-import org.rust.ExpandMacros
-import org.rust.ProjectDescriptor
-import org.rust.WithStdlibRustProjectDescriptor
+import org.rust.*
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.ide.colors.RsColor
 
 @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
@@ -34,15 +31,41 @@ class RsFormatMacroAnnotatorTest : RsAnnotatorTestBase(RsFormatMacroAnnotator::c
             println!("<FORMAT_PARAMETER>{<FORMAT_SPECIFIER>0</FORMAT_SPECIFIER>}</FORMAT_PARAMETER><FORMAT_PARAMETER>{<error descr="Invalid reference to positional argument 1 (there is 1 argument)">1</error>}</FORMAT_PARAMETER>", 1);
             println!("<FORMAT_PARAMETER>{<FORMAT_SPECIFIER>0</FORMAT_SPECIFIER>}</FORMAT_PARAMETER><FORMAT_PARAMETER>{<FORMAT_SPECIFIER>1</FORMAT_SPECIFIER>}</FORMAT_PARAMETER><FORMAT_PARAMETER>{<error descr="Invalid reference to positional argument 3 (there are 2 arguments)">3</error>}</FORMAT_PARAMETER>", 1, 1);
             println!("Hello <FORMAT_PARAMETER>{:<error descr="Invalid reference to positional argument 1 (there is 1 argument)">1${'$'}</error>}</FORMAT_PARAMETER>", 1);
-            println!("<FORMAT_PARAMETER>{<error descr="There is no argument named `foo`">foo</error>}</FORMAT_PARAMETER>");
-            println!("Hello <FORMAT_PARAMETER>{:<error descr="There is no argument named `foo`">foo${'$'}</error>}</FORMAT_PARAMETER>", 1);
         }
     """)
 
-    @MockRustcVersion("1.50.0-nightly")
-    fun `test implicit named arguments`() = checkErrors("""
+    // TODO: the plugin should highlight unknown argument even if `format_args_capture` is available
+    @MockRustcVersion("1.57.0-nightly")
+    fun `test missing explicit arguments 1`() = checkErrors("""
         #![feature(format_args_capture)]
 
+        $implDisplayI32
+
+        println!("<FORMAT_PARAMETER>{<FORMAT_SPECIFIER>foo</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>");
+        println!("Hello <FORMAT_PARAMETER>{:<FORMAT_SPECIFIER>foo${'$'}</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>", 1);
+    """)
+
+    // TODO: the plugin should highlight unknown argument even if `format_args_capture` is available
+    @MinRustcVersion("1.58.0-nightly")
+    fun `test missing explicit arguments 2`() = checkErrors("""
+        $implDisplayI32
+
+        println!("<FORMAT_PARAMETER>{<FORMAT_SPECIFIER>foo</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>");
+        println!("Hello <FORMAT_PARAMETER>{:<FORMAT_SPECIFIER>foo${'$'}</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>", 1);
+    """)
+
+    @MockRustcVersion("1.50.0-nightly")
+    fun `test implicit named arguments 1`() = checkErrors("""
+        #![feature(format_args_capture)]
+
+        fn main() {
+            let foo = 1;
+            println!("Hello <FORMAT_PARAMETER>{<FORMAT_SPECIFIER>foo</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>");
+        }
+    """)
+
+    @MinRustcVersion("1.58.0-nightly")
+    fun `test implicit named arguments 2`() = checkErrors("""
         fn main() {
             let foo = 1;
             println!("Hello <FORMAT_PARAMETER>{<FORMAT_SPECIFIER>foo</FORMAT_SPECIFIER>}</FORMAT_PARAMETER>");
@@ -521,22 +544,56 @@ If you intended to print `{` symbol, you can escape it using `{{`">{</error>"###
         }
     """)
 
+    @MockEdition(Edition.EDITION_2018)
     fun `test panic with single literal`() = checkErrors("""
         fn main() {
             panic!("{}");
         }
     """)
 
+    @MockEdition(Edition.EDITION_2021)
+    fun `test panic macro 2021`() = checkErrors("""
+        use std::fmt;
+
+        struct S;
+        impl fmt::Display for S {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { unimplemented!() }
+        }
+
+        fn main() {
+            panic!("<error descr="Invalid reference to positional argument 0 (no arguments were given)">{}</error>");
+            panic!("<FORMAT_PARAMETER>{}</FORMAT_PARAMETER>", S);
+            panic!("<FORMAT_PARAMETER>{}</FORMAT_PARAMETER> <error descr="Invalid reference to positional argument 1 (there is 1 argument)">{}</error>", S);
+            panic!("<FORMAT_PARAMETER>{}</FORMAT_PARAMETER>", S, <error descr="Argument never used">S</error>);
+        }
+    """)
+
     @ExpandMacros
     fun `test custom macro`() = checkErrors("""
-        $implDisplayI32
-
         macro_rules! as_is { ($($ t:tt)*) => {$($ t)*}; }
         fn main() {
             as_is! {
                 println!("<FORMAT_PARAMETER>{}</FORMAT_PARAMETER>", 1);
                 println!("", <error descr="Argument never used">1</error>);
             }
+        }
+    """)
+
+    @MockAdditionalCfgOptions("intellij_rust")
+    fun `test no highlighting in cfg-disabled code`() = checkErrors("""
+        $implDisplayI32
+
+        #[cfg(not(intellij_rust))]
+        fn foo() {
+            println!("{}");
+            println!("{0}{1}", 1);
+            println!("{0}{1}{3}", 1, 1);
+            println!("Hello {:1${'$'}}", 1);
+        }
+
+        fn bar() {
+            #[cfg(not(intellij_rust))]
+            println!("{}");
         }
     """)
 }

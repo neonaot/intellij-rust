@@ -5,14 +5,22 @@
 
 package org.rust.ide.template.postfix
 
+import org.rust.ExpandMacros
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
+import org.rust.lang.core.macros.MacroExpansionScope
 
 class LetPostfixTemplateTest : RsPostfixTemplateTest(LetPostfixTemplate(RsPostfixTemplateProvider())) {
-    fun `test not expr`() = doTestNotApplicable("""
+    fun `test not expr 1`() = doTestNotApplicable("""
         fn foo() {
             println!("test");.let/*caret*/
         }
+    """)
+
+    fun `test not expr 2`() = doTestNotApplicable("""
+        fn foo() {
+            println!("test");
+        }.let/*caret*/
     """)
 
     fun `test simple expr`() = doTest("""
@@ -25,7 +33,20 @@ class LetPostfixTemplateTest : RsPostfixTemplateTest(LetPostfixTemplate(RsPostfi
         }
     """)
 
+    fun `test incomplete expr`() = doTest("""
+        fn foo() {
+            4.let/*caret*/
+            bar();
+        }
+    """, """
+        fn foo() {
+            let /*caret*/i = 4;
+            bar();
+        }
+    """)
+
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test par expr`() = doTest("""
         fn foo() {
             (1 + 2).let/*caret*/;

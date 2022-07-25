@@ -82,7 +82,7 @@ object RsImplTraitMemberCompletionProvider : RsCompletionProvider() {
         for (item in parentItems) {
             val lookup = getCompletion(item, implBlock, subst, memberGenerator, keyword?.first)
             result.addElement(
-                lookup.withPriority(KEYWORD_PRIORITY + 1)
+                lookup.toRsLookupElement(RsLookupElementProperties(isImplMemberFullLineCompletion = true))
             )
         }
     }
@@ -171,7 +171,7 @@ private fun completeFunction(
             }
             val reformatted = reformat(element) ?: return@withInsertHandler
 
-            val body = reformatted.block?.expr ?: return@withInsertHandler
+            val body = reformatted.block?.syntaxTailStmt ?: return@withInsertHandler
             runTemplate(body, context.editor)
         }
         .withPresentableText("$shortSignature { ... }")

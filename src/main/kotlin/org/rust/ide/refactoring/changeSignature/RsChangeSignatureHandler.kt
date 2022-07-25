@@ -9,17 +9,19 @@ import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.refactoring.RefactoringBundle
 import com.intellij.refactoring.changeSignature.ChangeSignatureHandler
 import com.intellij.refactoring.util.CommonRefactoringUtil
 import org.rust.RsBundle
+import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.openapiext.editor
 import org.rust.openapiext.elementUnderCaretInEditor
+import org.rust.openapiext.isUnitTestMode
 
 class RsChangeSignatureHandler : ChangeSignatureHandler {
     override fun getTargetNotFoundMessage(): String = "The caret should be positioned at a function or method"
@@ -64,7 +66,11 @@ class RsChangeSignatureHandler : ChangeSignatureHandler {
         }
     }
 
-    private fun showCannotRefactorErrorHint(project: Project, editor: Editor, message: String) {
+    private fun showCannotRefactorErrorHint(
+        project: Project,
+        editor: Editor,
+        @Suppress("UnstableApiUsage") @DialogMessage message: String
+    ) {
         CommonRefactoringUtil.showErrorHint(project, editor,
             RefactoringBundle.getCannotRefactorMessage(message),
             RefactoringBundle.message("changeSignature.refactoring.name"),
@@ -77,7 +83,12 @@ class RsChangeSignatureHandler : ChangeSignatureHandler {
             return checkFunction(function) == null
         }
 
+        @Suppress("UnstableApiUsage")
+        @DialogMessage
         private fun checkFunction(function: RsFunction): String? {
+            if (function.containingCrate?.origin != PackageOrigin.WORKSPACE) {
+                return "Cannot change signature of function in a foreign crate"
+            }
             if (function.valueParameters != function.rawValueParameters) {
                 return RsBundle.message("refactoring.change.signature.error.cfg.disabled.parameters")
             }

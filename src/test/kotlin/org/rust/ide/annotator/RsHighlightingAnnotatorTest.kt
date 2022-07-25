@@ -5,8 +5,8 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.BatchMode
 import com.intellij.ide.todo.TodoConfiguration
+import com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue
 import org.intellij.lang.annotations.Language
 import org.rust.*
 import org.rust.cargo.project.workspace.CargoWorkspace.Edition
@@ -77,8 +77,15 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
             <MACRO>unreachable</MACRO><MACRO>!</MACRO>();
         }
         <MACRO>macro_rules</MACRO><MACRO>!</MACRO> foo {
-            (x => $ <FUNCTION>e</FUNCTION>:expr) => (println!("mode X: {}", $ <FUNCTION>e</FUNCTION>));
-            (y => $ <FUNCTION>e</FUNCTION>:expr) => (println!("mode Y: {}", $ <FUNCTION>e</FUNCTION>));
+            (x => <MACRO>$</MACRO> <FUNCTION>e</FUNCTION><MACRO>:</MACRO><MACRO>expr</MACRO>) => (println!("mode X: {}", <MACRO>$</MACRO> <FUNCTION>e</FUNCTION>));
+            (y => <MACRO>$</MACRO> <FUNCTION>e</FUNCTION><MACRO>:</MACRO><MACRO>expr</MACRO>) => (println!("mode Y: {}", <MACRO>$</MACRO> <FUNCTION>e</FUNCTION>));
+            (z => <MACRO>$</MACRO><MACRO>(</MACRO><MACRO>$</MACRO> <FUNCTION>e</FUNCTION><MACRO>:</MACRO> <MACRO>expr</MACRO>,<MACRO>)</MACRO><MACRO>*</MACRO>) => {
+                print!("mode Z:");
+                <MACRO>$</MACRO><MACRO>(</MACRO>
+                    print!(" {},", <MACRO>$</MACRO> <FUNCTION>e</FUNCTION>);
+                <MACRO>)</MACRO><MACRO>*</MACRO>
+                println!();
+            }
         }
         impl T {
             <MACRO>foo</MACRO><MACRO>!</MACRO>();
@@ -125,7 +132,7 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
         }
     """)
 
-    fun `test ? operator`() = checkHighlightingWithMacro("""
+    fun `test question mark operator`() = checkHighlightingWithMacro("""
         fn <FUNCTION>foo</FUNCTION>() -> Result<<PRIMITIVE_TYPE>i32</PRIMITIVE_TYPE>, ()>{
             Ok(Ok(1)<Q_OPERATOR>?</Q_OPERATOR> * 2)
         }
@@ -160,6 +167,14 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
             let mut <VARIABLE>i32</VARIABLE> = 1;
             <VARIABLE>i32</VARIABLE> = 2;
             true
+        }
+
+        fn <FUNCTION>not_a_primitive</FUNCTION>() {
+            struct <STRUCT>u8</STRUCT>;
+            mod <MODULE>u16</MODULE> { type <TYPE_ALIAS>T</TYPE_ALIAS> = <PRIMITIVE_TYPE>u16</PRIMITIVE_TYPE>; }
+
+            let <VARIABLE>a</VARIABLE>: <STRUCT>u8</STRUCT> = <STRUCT>u8</STRUCT>;
+            let <VARIABLE>b</VARIABLE>: <MODULE>u16</MODULE>::<TYPE_ALIAS>T</TYPE_ALIAS>;
         }
     """)
 
@@ -199,7 +214,6 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
         }
     """)
 
-    @MockEdition(Edition.EDITION_2018)
     fun `test postfix await 2018`() = checkHighlightingWithMacro("""
         fn main() {
             dummy.<KEYWORD>await</KEYWORD>;
@@ -214,7 +228,6 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
         """)
     }
 
-    @MockEdition(Edition.EDITION_2018)
     @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
     fun `test highlight macro in use item`() = checkByFileTree("""
     //- lib.rs
@@ -286,6 +299,7 @@ class RsHighlightingAnnotatorTest : RsAnnotatorTestBase(RsHighlightingAnnotator:
         val todoConfiguration = TodoConfiguration.getInstance()
         val todoPatterns = todoConfiguration.todoPatterns
         todoConfiguration.todoPatterns = emptyArray()
+        dispatchAllEventsInIdeEventQueue()
         try {
             action()
         } finally {

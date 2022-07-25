@@ -8,9 +8,6 @@ package org.rust.ide.inspections
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
 
-/**
- * Tests for Self Convention inspection
- */
 class RsSelfConventionInspectionTest : RsInspectionsTestBase(RsSelfConventionInspection::class) {
     fun `test from`() = checkByText("""
         struct Foo;
@@ -65,42 +62,6 @@ class RsSelfConventionInspectionTest : RsInspectionsTestBase(RsSelfConventionIns
         }
     """)
 
-    fun `test get`() = checkByText("""
-        struct Foo;
-        impl Foo {
-            fn get_a(<warning descr="methods called `get_*` usually take self by reference; consider choosing a less ambiguous name">self</warning>) {}
-            fn get_b(&self) {}
-            fn get_c(<warning descr="methods called `get_*` usually take self by reference; consider choosing a less ambiguous name">&mut self</warning>) {}
-        }
-    """)
-
-    fun `test get mut`() = checkByText("""
-        struct Foo;
-        impl Foo {
-            fn get_a_mut(<warning descr="methods called `get_*_mut` usually take self by mutable reference; consider choosing a less ambiguous name">self</warning>) {}
-            fn get_b_mut(<warning descr="methods called `get_*_mut` usually take self by mutable reference; consider choosing a less ambiguous name">&self</warning>) {}
-            fn get_c_mut(&mut self) {}
-        }
-    """)
-
-    fun `test set`() = checkByText("""
-        struct Foo;
-        impl Foo {
-            fn set_foo(<warning descr="methods called `set_*` usually take self by mutable reference; consider choosing a less ambiguous name">&self</warning>) {}
-            fn set_bar(&mut self) {}
-        }
-    """)
-
-    fun `test with`() = checkByText("""
-        struct Foo;
-        impl Foo {
-            fn with_foo(<warning descr="methods called `with_*` usually take self by value or self by mutable reference or no self; consider choosing a less ambiguous name">&self</warning>) {}
-            fn with_bar(&mut self) {}
-            fn with_baz(self) {}
-            fn with_constructor() {}
-        }
-    """)
-
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test is suppressed for copyable`() = checkByText("""
         #[derive(Copy)]
@@ -125,6 +86,39 @@ class RsSelfConventionInspectionTest : RsInspectionsTestBase(RsSelfConventionIns
         }
         impl Bar for Foo {
             fn to_something(self) -> u32 { 0 }
+        }
+    """)
+
+    fun `test arbitrary self type`() = checkByText("""
+        #[lang="deref"]
+        trait Deref {
+            type Target;
+        }
+
+        struct Wrapper<T>(T);
+
+        impl<T> Deref for Wrapper<T> {
+            type Target = T;
+        }
+
+        struct Foo;
+        impl Foo {
+            fn as_foo(self: Wrapper<Self>) -> u32 { 0 }
+            fn is_awesome(self: Wrapper<Self>) {}
+            fn from_nothing(<warning descr="methods called `from_*` usually take no self; consider choosing a less ambiguous name">self: Wrapper<Self></warning>) -> u32 { 0 }
+        }
+    """)
+
+    fun `test explicit self type`() = checkByText("""
+        struct Foo;
+        impl Foo {
+            fn as_foo(<warning descr="methods called `as_*` usually take self by reference or self by mutable reference; consider choosing a less ambiguous name">self: Self</warning>) -> u32 { 0 }
+            fn as_foo_2(self: &Self) -> u32 { 0 }
+            fn as_foo_mut(self: &mut Self) -> u32 { 0 }
+            fn is_awesome(self: &Self) {}
+            fn into_foo(<warning descr="methods called `into_*` usually take self by value; consider choosing a less ambiguous name">self: &Self</warning>) -> u32 { 0 }
+            fn into_foo_mut(<warning descr="methods called `into_*` usually take self by value; consider choosing a less ambiguous name">self: &mut Self</warning>) -> u32 { 0 }
+            fn from_nothing(<warning descr="methods called `from_*` usually take no self; consider choosing a less ambiguous name">self: Self</warning>) -> u32 { 0 }
         }
     """)
 }

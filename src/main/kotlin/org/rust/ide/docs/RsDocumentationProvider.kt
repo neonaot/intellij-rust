@@ -9,10 +9,10 @@ import com.intellij.codeInsight.documentation.DocumentationManagerUtil
 import com.intellij.lang.documentation.AbstractDocumentationProvider
 import com.intellij.lang.documentation.DocumentationMarkup
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.options.advanced.AdvancedSettings
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
-import com.intellij.openapiext.hitOnFalse
 import com.intellij.psi.*
+import org.jetbrains.annotations.TestOnly
 import org.rust.cargo.project.workspace.PackageOrigin.*
 import org.rust.cargo.util.AutoInjectedCrates.STD
 import org.rust.ide.presentation.presentableQualifiedName
@@ -26,7 +26,9 @@ import org.rust.lang.core.types.type
 import org.rust.lang.doc.RsDocRenderMode
 import org.rust.lang.doc.documentationAsHtml
 import org.rust.lang.doc.psi.RsDocComment
+import org.rust.openapiext.Testmark
 import org.rust.openapiext.escaped
+import org.rust.openapiext.hitOnFalse
 import org.rust.stdext.joinToWithBuffer
 import java.util.function.Consumer
 
@@ -167,19 +169,20 @@ class RsDocumentationProvider : AbstractDocumentationProvider() {
             }
         }
 
+        val baseUrl = getExternalDocumentationBaseUrl()
         val pagePrefix = when (origin) {
             STDLIB -> STD_DOC_HOST
             DEPENDENCY, STDLIB_DEPENDENCY -> {
                 val pkg = (element as? RsElement)?.containingCargoPackage ?: return emptyList()
                 // Packages without source don't have documentation at docs.rs
                 if (pkg.source == null) {
-                    Testmarks.pkgWithoutSource.hit()
+                    Testmarks.PkgWithoutSource.hit()
                     return emptyList()
                 }
-                "$DOCS_RS_HOST/${pkg.name}/${pkg.version}"
+                "$baseUrl${pkg.name}/${pkg.version}"
             }
             else -> {
-                Testmarks.nonDependency.hit()
+                Testmarks.NonDependency.hit()
                 return emptyList()
             }
         }
@@ -209,7 +212,7 @@ class RsDocumentationProvider : AbstractDocumentationProvider() {
         get() {
             // items with #[doc(hidden)] attribute don't have external documentation
             if (queryAttributes.isDocHidden) {
-                Testmarks.docHidden.hit()
+                Testmarks.DocHidden.hit()
                 return false
             }
 
@@ -225,6 +228,7 @@ class RsDocumentationProvider : AbstractDocumentationProvider() {
                                 owner.impl.traitRef?.resolveToTrait()?.hasExternalDocumentation == true
                             }
                         }
+                        else -> Unit
                     }
                 } else {
                     if (visibility != RsVisibility.Public) return false
@@ -233,7 +237,7 @@ class RsDocumentationProvider : AbstractDocumentationProvider() {
 
             // macros without #[macro_export] are not public and don't have external documentation
             if (this is RsMacro) {
-                return Testmarks.notExportedMacro.hitOnFalse(hasMacroExport)
+                return Testmarks.NotExportedMacro.hitOnFalse(hasMacroExport)
             }
             // TODO: we should take into account real path of item for user, i.e. take into account reexports
             // instead of already resolved item path
@@ -251,23 +255,48 @@ class RsDocumentationProvider : AbstractDocumentationProvider() {
 
     companion object {
         const val STD_DOC_HOST = "https://doc.rust-lang.org"
-        const val DOCS_RS_HOST = "https://docs.rs"
     }
 
     object Testmarks {
-        val docHidden = Testmark("docHidden")
-        val notExportedMacro = Testmark("notExportedMacro")
-        val pkgWithoutSource = Testmark("pkgWithoutSource")
-        val nonDependency = Testmark("nonDependency")
+        object DocHidden : Testmark()
+        object NotExportedMacro : Testmark()
+        object PkgWithoutSource : Testmark()
+        object NonDependency : Testmark()
     }
 }
+
+private const val EXTERNAL_DOCUMENTATION_URL_SETTING_KEY: String = "org.rust.external.doc.url"
+
+/**
+ * Returns the base URL used for creating external code and crate documentation links.
+ */
+fun getExternalDocumentationBaseUrl(): String {
+    val url = AdvancedSettings.getString(EXTERNAL_DOCUMENTATION_URL_SETTING_KEY)
+    return if (url.endsWith("/")) {
+        url
+    } else {
+        "$url/"
+    }
+}
+
+@TestOnly
+fun withExternalDocumentationBaseUrl(url: String, action: () -> Unit) {
+    val originalUrl = getExternalDocumentationBaseUrl()
+    try {
+        AdvancedSettings.setString(EXTERNAL_DOCUMENTATION_URL_SETTING_KEY, url)
+        action()
+    } finally {
+        AdvancedSettings.setString(EXTERNAL_DOCUMENTATION_URL_SETTING_KEY, originalUrl)
+    }
+}
+
 
 private fun RsDocAndAttributeOwner.header(buffer: StringBuilder) {
     val rawLines = when (this) {
         is RsNamedFieldDecl -> listOfNotNull((parent?.parent as? RsDocAndAttributeOwner)?.presentableQualifiedName)
         is RsStructOrEnumItemElement,
         is RsTraitItem,
-        is RsMacro -> listOfNotNull(presentableQualifiedModName)
+        is RsMacroDefinitionBase -> listOfNotNull(presentableQualifiedModName)
         is RsAbstractable -> when (val owner = owner) {
             is RsAbstractableOwner.Foreign,
             is RsAbstractableOwner.Free -> listOfNotNull(presentableQualifiedModName)
@@ -287,8 +316,7 @@ fun RsDocAndAttributeOwner.signature(builder: StringBuilder) {
         is RsNamedFieldDecl -> listOfNotNull(presentationInfo?.signatureText)
         is RsFunction -> {
             val buffer = StringBuilder()
-            declarationModifiers.joinTo(buffer, " ")
-            buffer += " "
+            declarationModifiers.joinTo(buffer, separator = " ", postfix = " ")
             buffer.b { it += name }
             typeParameterList?.generateDocumentation(buffer)
             valueParameterList?.generateDocumentation(buffer)
@@ -297,7 +325,7 @@ fun RsDocAndAttributeOwner.signature(builder: StringBuilder) {
         }
         is RsConstant -> {
             val buffer = StringBuilder()
-            declarationModifiers.joinTo(buffer, " ", "", " ")
+            declarationModifiers.joinTo(buffer, separator = " ", postfix = " ")
             buffer.b { it += name }
             typeReference?.generateDocumentation(buffer, ": ")
             expr?.generateDocumentation(buffer, " = ")
@@ -308,7 +336,7 @@ fun RsDocAndAttributeOwner.signature(builder: StringBuilder) {
             val name = name
             if (name != null) {
                 val buffer = StringBuilder()
-                (this as RsItemElement).declarationModifiers.joinTo(buffer, " ", "", " ")
+                (this as RsItemElement).declarationModifiers.joinTo(buffer, separator = " ", postfix = " ")
                 buffer.b { it += name }
                 (this as RsGenericDeclaration).typeParameterList?.generateDocumentation(buffer)
                 (this as? RsTypeAlias)?.typeReference?.generateDocumentation(buffer, " = ")
@@ -316,6 +344,12 @@ fun RsDocAndAttributeOwner.signature(builder: StringBuilder) {
             } else emptyList()
         }
         is RsMacro -> listOf("macro <b>$name</b>")
+        is RsMacro2 -> {
+            val buffer = StringBuilder()
+            declarationModifiers.joinTo(buffer, separator = " ", postfix = " ")
+            buffer.b { it += name }
+            listOf(buffer.toString())
+        }
         is RsImplItem -> declarationText
         else -> emptyList()
     }
@@ -349,9 +383,7 @@ private val RsTraitItem.declarationText: List<String>
 private val RsItemElement.declarationModifiers: List<String>
     get() {
         val modifiers = mutableListOf<String>()
-        if (isPublic) {
-            modifiers += "pub"
-        }
+        vis?.text?.let { modifiers += it }
         when (this) {
             is RsFunction -> {
                 if (isAsync) {
@@ -363,9 +395,9 @@ private val RsItemElement.declarationModifiers: List<String>
                 if (isUnsafe) {
                     modifiers += "unsafe"
                 }
-                if (isExtern) {
+                if (isActuallyExtern) {
                     modifiers += "extern"
-                    abiName?.let { modifiers += it }
+                    abiName?.let { modifiers += "\"$it\"" }
                 }
                 modifiers += "fn"
             }
@@ -379,6 +411,7 @@ private val RsItemElement.declarationModifiers: List<String>
                 }
                 modifiers += "trait"
             }
+            is RsMacro2 -> modifiers += "macro"
             else -> error("unexpected type $javaClass")
         }
         return modifiers
@@ -414,7 +447,7 @@ private fun PsiElement.generateDocumentation(buffer: StringBuilder, prefix: Stri
     when (this) {
         is RsPath -> generatePathDocumentation(this, buffer)
         is RsAssocTypeBinding -> {
-            buffer += identifier.text
+            path.generateDocumentation(buffer)
             typeReference?.generateDocumentation(buffer, " = ")
         }
         is RsTraitRef -> path.generateDocumentation(buffer)
@@ -433,7 +466,7 @@ private fun PsiElement.generateDocumentation(buffer: StringBuilder, prefix: Stri
         }
         is RsTypeArgumentList -> (lifetimeList + typeReferenceList + assocTypeBindingList)
             .joinToWithBuffer(buffer, ", ", "&lt;", "&gt;") { generateDocumentation(it) }
-        is RsTypeParameterList -> genericParameterList
+        is RsTypeParameterList -> getGenericParameters()
             .joinToWithBuffer(buffer, ", ", "&lt;", "&gt;") { generateDocumentation(it) }
         is RsValueParameterList -> (listOfNotNull(selfParameter) + valueParameterList + listOfNotNull(variadic))
             .joinToWithBuffer(buffer, ", ", "(", ")") { generateDocumentation(it) }

@@ -5,9 +5,9 @@
 
 package org.rust.lang.core.completion
 
+import com.intellij.codeInsight.CodeInsightSettings
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import com.intellij.testFramework.fixtures.CodeInsightTestFixture
 import com.intellij.testFramework.fixtures.impl.BaseFixture
 import org.intellij.lang.annotations.Language
@@ -56,21 +56,13 @@ abstract class RsCompletionTestFixtureBase<IN>(
         before: IN,
         @Language("Rust") after: String,
         completionChar: Char,
-        testmark: Testmark?
     ) {
-        val action = {
-            checkByText(before, after.trimIndent()) {
-                val items = myFixture.completeBasic()
-                    ?: return@checkByText // single completion was inserted
-                val lookupItem = items.find { it.lookupString == lookupString } ?: error("Lookup string $lookupString not found")
-                myFixture.lookup.currentItem = lookupItem
-                myFixture.type(completionChar)
-            }
-        }
-        if (testmark != null) {
-            testmark.checkHit(action)
-        } else {
-            action()
+        checkByText(before, after.trimIndent()) {
+            val items = myFixture.completeBasic()
+                ?: return@checkByText // single completion was inserted
+            val lookupItem = items.find { it.lookupString == lookupString } ?: error("Lookup string $lookupString not found")
+            myFixture.lookup.currentItem = lookupItem
+            myFixture.type(completionChar)
         }
     }
 
@@ -95,8 +87,14 @@ abstract class RsCompletionTestFixtureBase<IN>(
         variants: Iterable<String>,
         render: LookupElement.() -> String = { lookupString }
     ) {
-        prepare(code)
-        doContainsCompletion(variants.toSet(), render)
+        val oldAutocomplete = CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION
+        CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION = false
+        try {
+            prepare(code)
+            doContainsCompletion(variants.toSet(), render)
+        } finally {
+            CodeInsightSettings.getInstance().AUTOCOMPLETE_ON_CODE_COMPLETION = oldAutocomplete
+        }
     }
 
     fun doContainsCompletion(variants: Set<String>, render: LookupElement.() -> String) {
@@ -121,7 +119,7 @@ abstract class RsCompletionTestFixtureBase<IN>(
         prepare(code)
         val lookups = myFixture.completeBasic()
         checkNotNull(lookups) {
-            "Expected completions that contain $variants, but no completions found"
+            "Expected completions that don't contain $variants, but got single variant"
         }
         if (lookups.any { it.render() in variants }) {
             error("Expected completions that don't contain $variants, but got ${lookups.map { it.render() }}")

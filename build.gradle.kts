@@ -1,17 +1,16 @@
 import groovy.json.JsonSlurper
+import groovy.xml.XmlParser
 import org.apache.tools.ant.taskdefs.condition.Os.*
-import org.gradle.api.JavaVersion.VERSION_1_8
-import org.gradle.api.internal.HasConvention
+import org.gradle.api.JavaVersion.VERSION_11
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform
-import org.jetbrains.grammarkit.tasks.GenerateLexer
-import org.jetbrains.grammarkit.tasks.GenerateParser
+import org.jetbrains.grammarkit.tasks.GenerateLexerTask
+import org.jetbrains.grammarkit.tasks.GenerateParserTask
 import org.jetbrains.intellij.tasks.PatchPluginXmlTask
 import org.jetbrains.intellij.tasks.PrepareSandboxTask
 import org.jetbrains.intellij.tasks.PublishPluginTask
 import org.jetbrains.intellij.tasks.RunIdeTask
-import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSet
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jsoup.Jsoup
 import java.io.Writer
@@ -35,6 +34,7 @@ val baseVersion = when (baseIDE) {
     else -> error("Unexpected IDE name: `$baseIDE`")
 }
 
+val tomlPlugin = "org.toml.lang"
 val nativeDebugPlugin = "com.intellij.nativeDebug:${prop("nativeDebugPluginVersion")}"
 val graziePlugin = "tanvd.grazi"
 val psiViewerPlugin = "PsiViewer:${prop("psiViewerPluginVersion")}"
@@ -50,19 +50,17 @@ val compileNativeCodeTaskName = "compileNativeCode"
 
 plugins {
     idea
-    kotlin("jvm") version "1.5.20"
-    id("org.jetbrains.intellij") version "1.1.3"
-    id("org.jetbrains.grammarkit") version "2021.1.3"
-    id("net.saliman.properties") version "1.5.1"
-    id("org.gradle.test-retry") version "1.2.0"
+    kotlin("jvm") version "1.7.10"
+    id("org.jetbrains.intellij") version "1.7.0"
+    id("org.jetbrains.grammarkit") version "2021.2.2"
+    id("net.saliman.properties") version "1.5.2"
+    id("org.gradle.test-retry") version "1.4.0"
 }
 
 idea {
     module {
         // https://github.com/gradle/kotlin-dsl/issues/537/
-        // BACKCOMPAT: 2021.1. Drop `build-cache` from excluded dir.
-        // The corresponding code was temporarily left here to handle old not-removed `build-cache` dir
-        excludeDirs = excludeDirs + file("testData") + file("deps") + file("bin") + file("build-cache")
+        excludeDirs = excludeDirs + file("testData") + file("deps") + file("bin")
     }
 }
 
@@ -77,7 +75,6 @@ allprojects {
 
     repositories {
         mavenCentral()
-        jcenter()
         maven("https://cache-redirector.jetbrains.com/intellij-dependencies")
     }
 
@@ -106,10 +103,11 @@ allprojects {
     tasks {
         withType<KotlinCompile> {
             kotlinOptions {
-                jvmTarget = "1.8"
-                languageVersion = "1.5"
-                apiVersion = "1.4"
-                freeCompilerArgs = listOf("-Xjvm-default=enable")
+                jvmTarget = "11"
+                languageVersion = "1.7"
+                // see https://plugins.jetbrains.com/docs/intellij/kotlin.html#kotlin-standard-library
+                apiVersion = "1.6"
+                freeCompilerArgs = listOf("-Xjvm-default=all")
             }
         }
         withType<PatchPluginXmlTask> {
@@ -117,14 +115,24 @@ allprojects {
             untilBuild.set(prop("untilBuild"))
         }
 
-        buildSearchableOptions {
-            // buildSearchableOptions task doesn't make sense for non-root subprojects
-            val isRootProject = project.name in listOf("plugin", "intellij-toml")
-            enabled = isRootProject && prop("enableBuildSearchableOptions").toBoolean()
-        }
+        // All these tasks don't make sense for non-root subprojects
+        // Root project (i.e. `:plugin`) enables them itlsef if needed
+        runIde { enabled = false }
+        prepareSandbox { enabled = false }
+        buildSearchableOptions { enabled = false }
 
         test {
-            testLogging.showStandardStreams = prop("showStandardStreams").toBoolean()
+            testLogging {
+                showStandardStreams = prop("showStandardStreams").toBoolean()
+                afterSuite(
+                    KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
+                        if (desc.parent == null) { // will match the outermost suite
+                            val output = "Results: ${result.resultType} (${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped)"
+                            println(output)
+                        }
+                    })
+                )
+            }
             if (isCI) {
                 retry {
                     maxRetries.set(3)
@@ -162,8 +170,8 @@ allprojects {
     }
 
     configure<JavaPluginExtension> {
-        sourceCompatibility = VERSION_1_8
-        targetCompatibility = VERSION_1_8
+        sourceCompatibility = VERSION_11
+        targetCompatibility = VERSION_11
     }
 
     sourceSets {
@@ -244,7 +252,7 @@ project(":plugin") {
     intellij {
         pluginName.set("intellij-rust")
         val pluginList = mutableListOf(
-            project(":intellij-toml"),
+            tomlPlugin,
             intelliLangPlugin,
             graziePlugin,
             psiViewerPlugin,
@@ -266,6 +274,7 @@ project(":plugin") {
         implementation(project(":idea"))
         implementation(project(":clion"))
         implementation(project(":debugger"))
+        implementation(project(":profiler"))
         implementation(project(":toml"))
         implementation(project(":copyright"))
         implementation(project(":coverage"))
@@ -276,11 +285,50 @@ project(":plugin") {
         implementation(project(":ml-completion"))
     }
 
+    // Collects all jars produced by compilation of project modules and merges them into singe one.
+    // We need to put all plugin manifest files into single jar to make new plugin model work
+    val mergePluginJarTask = task<Jar>("mergePluginJars") {
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+        archiveBaseName.set("intellij-rust")
+
+        exclude("META-INF/MANIFEST.MF")
+        exclude("**/classpath.index")
+
+        val pluginLibDir by lazy {
+            val sandboxTask = tasks.prepareSandbox.get()
+            sandboxTask.destinationDir.resolve("${sandboxTask.pluginName.get()}/lib")
+        }
+
+        val pluginJars by lazy {
+            pluginLibDir.listFiles().orEmpty().filter { it.isPluginJar() }
+        }
+
+        destinationDirectory.set(project.layout.dir(provider { pluginLibDir }))
+
+        doFirst {
+            for (file in pluginJars) {
+                from(zipTree(file))
+            }
+        }
+
+        doLast {
+            delete(pluginJars)
+        }
+    }
+
     tasks {
         buildPlugin {
             // Set proper name for final plugin zip.
             // Otherwise, base name is the same as gradle module name
             archiveBaseName.set("intellij-rust")
+        }
+        runIde { enabled = true }
+        prepareSandbox {
+            finalizedBy(mergePluginJarTask)
+            enabled = true
+        }
+        buildSearchableOptions {
+            enabled = prop("enableBuildSearchableOptions").toBoolean()
         }
 
         withType<PrepareSandboxTask> {
@@ -310,6 +358,9 @@ project(":plugin") {
 
             // Uncomment to enable FUS testing mode
             // jvmArgs("-Dfus.internal.test.mode=true")
+
+            // Uncomment to enable localization testing mode
+            // jvmArgs("-Didea.l10n=true")
         }
 
         withType<PatchPluginXmlTask> {
@@ -321,6 +372,16 @@ project(":plugin") {
             channels.set(listOf(channel))
         }
     }
+
+    // Generates event scheme for Rust plugin FUS events to `plugin/build/eventScheme.json`
+    task<RunIdeTask>("buildEventsScheme") {
+        dependsOn(tasks.prepareSandbox)
+        args("buildEventsScheme", "--outputFile=${buildDir.resolve("eventScheme.json").absolutePath}", "--pluginId=org.rust.lang")
+        // BACKCOMPAT: 2022.1. Update value to 222 and this comment
+        // `IDEA_BUILD_NUMBER` variable is used by `buildEventsScheme` task to write `buildNumber` to output json.
+        // It will be used by TeamCity automation to set minimal IDE version for new events
+        environment("IDEA_BUILD_NUMBER", "221")
+    }
 }
 
 project(":") {
@@ -328,28 +389,34 @@ project(":") {
         main {
             if (channel == "nightly" || channel == "dev") {
                 resources.srcDirs("src/main/resources-nightly")
+                resources.srcDirs("src/$platformVersion/main/resources-nightly")
             } else {
                 resources.srcDirs("src/main/resources-stable")
+                resources.srcDirs("src/$platformVersion/main/resources-stable")
             }
         }
     }
 
     dependencies {
-        implementation(project(":common"))
-        implementation("org.jetbrains:markdown:0.2.0") {
-            exclude(module = "kotlin-runtime")
-            exclude(module = "kotlin-stdlib")
-            exclude(module = "kotlin-stdlib-common")
+        implementation("org.jetbrains:markdown:0.3.1") {
+            excludeKotlinDeps()
         }
-        testImplementation(project(":common", "testOutput"))
-        testImplementation("com.squareup.okhttp3:mockwebserver:4.9.0")
+        implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-toml:2.13.3") {
+            exclude(module = "jackson-core")
+            exclude(module = "jackson-databind")
+            exclude(module = "jackson-annotations")
+        }
+        api("io.github.z4kn4fein:semver:1.3.3") {
+            excludeKotlinDeps()
+        }
+        testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
     }
 
-    val generateRustLexer = task<GenerateLexer>("generateRustLexer") {
-        source = "src/main/grammars/RustLexer.flex"
-        targetDir = "src/gen/org/rust/lang/core/lexer"
-        targetClass = "_RustLexer"
-        purgeOldFiles = true
+    val generateRustLexer = task<GenerateLexerTask>("generateRustLexer") {
+        source.set("src/main/grammars/RustLexer.flex")
+        targetDir.set("src/gen/org/rust/lang/core/lexer")
+        targetClass.set("_RustLexer")
+        purgeOldFiles.set(true)
     }
 
     // Previously, we had `GenerateLexer` task that generate a lexer for rustdoc highlighting.
@@ -359,12 +426,12 @@ project(":") {
         delete("src/gen/org/rust/lang/doc")
     }
 
-    val generateRustParser = task<GenerateParser>("generateRustParser") {
-        source = "src/main/grammars/RustParser.bnf"
-        targetRoot = "src/gen"
-        pathToParser = "/org/rust/lang/core/parser/RustParser.java"
-        pathToPsiRoot = "/org/rust/lang/core/psi"
-        purgeOldFiles = true
+    val generateRustParser = task<GenerateParserTask>("generateRustParser") {
+        source.set("src/main/grammars/RustParser.bnf")
+        targetRoot.set("src/gen")
+        pathToParser.set("/org/rust/lang/core/parser/RustParser.java")
+        pathToPsiRoot.set("/org/rust/lang/core/psi")
+        purgeOldFiles.set(true)
     }
 
     tasks {
@@ -382,12 +449,6 @@ project(":") {
                 into("bin")
                 include("**")
             }
-        }
-
-        // BACKCOMPAT: 2021.1. Drop `clean` task customization
-        // The corresponding code was temporarily left here to handle old not-removed `build-cache` dir
-        clean {
-            delete(*(File("${rootDir}/build-cache").listFiles() ?: emptyArray()))
         }
     }
 
@@ -412,9 +473,7 @@ project(":idea") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -425,10 +484,8 @@ project(":clion") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         implementation(project(":debugger"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -443,28 +500,38 @@ project(":debugger") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
+    }
+}
+
+project(":profiler") {
+    intellij {
+        version.set(clionVersion)
+        plugins.set(clionPlugins)
+    }
+    dependencies {
+        implementation(project(":"))
+        testImplementation(project(":", "testOutput"))
     }
 }
 
 project(":toml") {
     intellij {
-        plugins.set(listOf(project(":intellij-toml")))
+        plugins.set(listOf(tomlPlugin))
     }
     dependencies {
-        implementation("org.eclipse.jgit:org.eclipse.jgit:5.9.0.202009080501-r") { exclude("org.slf4j") }
-        implementation("com.vdurmont:semver4j:3.1.0")
+        implementation("org.eclipse.jgit:org.eclipse.jgit:6.2.0.202206071550-r") { exclude("org.slf4j") }
 
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
-
-        // TODO: Drop when gradle-intellij-plugin will be adding add all transitive dependencies
-        compileOnly(project(":intellij-toml:core"))
-        testCompileOnly(project(":intellij-toml:core"))
+    }
+    tasks {
+        // Set custom plugin directory name.
+        // Otherwise, `prepareSandbox`/`prepareTestingSandbox` tasks merge directories
+        // of `toml` plugin and `toml` module because of the same name into single one that's not expected
+        withType<PrepareSandboxTask> {
+            pluginName.set("rust-toml")
+        }
     }
 }
 
@@ -474,9 +541,7 @@ project(":intelliLang") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -487,27 +552,21 @@ project(":copyright") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
 project(":duplicates") {
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
 project(":coverage") {
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -517,9 +576,7 @@ project(":grazie") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -529,9 +586,7 @@ project(":js") {
     }
     dependencies {
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
 
@@ -540,74 +595,67 @@ project(":ml-completion") {
         plugins.set(listOf(mlCompletionPlugin))
     }
     dependencies {
-        implementation("org.jetbrains.intellij.deps.completion:completion-ranking-rust:0.2.2")
+        implementation("org.jetbrains.intellij.deps.completion:completion-ranking-rust:0.4.1")
         implementation(project(":"))
-        implementation(project(":common"))
         testImplementation(project(":", "testOutput"))
-        testImplementation(project(":common", "testOutput"))
     }
 }
-
-project(":intellij-toml") {
-    version = "0.2.$patchVersion.${prop("buildNumber")}$versionSuffix"
-
-    dependencies {
-        implementation(project(":intellij-toml:core"))
-    }
-
-    tasks {
-        withType<PublishPluginTask> {
-            token.set(prop("publishToken"))
-            channels.set(listOf(channel))
-        }
-    }
-}
-
-project(":intellij-toml:core") {
-    dependencies {
-        implementation(project(":common"))
-        testImplementation(project(":common", "testOutput"))
-    }
-
-    val generateTomlLexer = task<GenerateLexer>("generateTomlLexer") {
-        source = "src/main/grammars/TomlLexer.flex"
-        targetDir = "src/gen/org/toml/lang/lexer"
-        targetClass = "_TomlLexer"
-        purgeOldFiles = true
-    }
-
-    val generateTomlParser = task<GenerateParser>("generateTomlParser") {
-        source = "src/main/grammars/TomlParser.bnf"
-        targetRoot = "src/gen"
-        pathToParser = "/org/toml/lang/parse/TomlParser.java"
-        pathToPsiRoot = "/org/toml/lang/psi"
-        purgeOldFiles = true
-    }
-
-    tasks {
-        withType<KotlinCompile> {
-            dependsOn(generateTomlLexer, generateTomlParser)
-        }
-    }
-}
-
-project(":common")
 
 task("runPrettyPrintersTests") {
     doLast {
+        // https://github.com/intellij-rust/intellij-rust/issues/8482
+        if (platformVersion == 221) return@doLast
         val lldbPath = when {
             // TODO: Use `lldb` Python module from CLion distribution
             isFamily(FAMILY_MAC) -> "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/Python"
             isFamily(FAMILY_UNIX) -> "$projectDir/deps/${clionVersion.replaceFirst("CL", "clion")}/bin/lldb/linux/lib/python3.8/site-packages"
+            isFamily(FAMILY_WINDOWS) -> "" // `python36._pth` is used below instead
             else -> error("Unsupported OS")
         }
-        "cargo run --package pretty_printers_test --bin pretty_printers_test -- lldb $lldbPath".execute("pretty_printers_tests")
+        val runCommand = "cargo run --package pretty_printers_test --bin pretty_printers_test -- lldb $lldbPath"
+        if (isFamily(FAMILY_WINDOWS)) {
+            val lldbBundlePath = "$projectDir\\deps\\${clionVersion.replaceFirst("CL", "clion")}\\bin\\lldb\\win\\x64"
+            // Add path to bundled `lldb` Python module to `._pth` file (which overrides `sys.path`)
+            // TODO: Drop when this is implemented on CLion side
+            "cmd /C echo ../lib/site-packages>> bin/python36._pth".execute(lldbBundlePath)
+            // Create symlink to allow `lldb` Python module perform `import _lldb` inside
+            // TODO: Drop when this is implemented on CLion side
+            "cmd /C mklink $lldbBundlePath\\lib\\site-packages\\lldb\\_lldb.pyd $lldbBundlePath\\bin\\liblldb.dll".execute()
+
+            // Add path to bundled Python 3 to `Settings_windows.toml` (it is not added statically since it requires $projectDir)
+            "cmd /C echo python = \"${lldbBundlePath.replace("\\", "/")}/bin/python.exe\">> Settings_windows.toml".execute("pretty_printers_tests")
+            // Use UTF-8 to properly decode test output in `lldb_batchmode.py`
+            "cmd /C set PYTHONIOENCODING=utf8 & $runCommand".execute("pretty_printers_tests")
+        } else {
+            // TODO: Remove after CLion snapshot builds provide these files with required permissions
+            if (isFamily(FAMILY_UNIX)) {
+                val lldbLinuxBinDir = File("$projectDir/deps/${clionVersion.replaceFirst("CL", "clion")}/bin/lldb/linux/bin")
+                lldbLinuxBinDir.resolve("lldb").setExecutable(true)
+                lldbLinuxBinDir.resolve("LLDBFrontend").setExecutable(true)
+                lldbLinuxBinDir.resolve("lldb-argdumper").setExecutable(true)
+                lldbLinuxBinDir.resolve("lldb-server").setExecutable(true)
+            } else if (isFamily(FAMILY_MAC)) {
+                val lldbMacBinDir = File("$projectDir/deps/${clionVersion.replaceFirst("CL", "clion")}/bin/lldb/mac")
+                lldbMacBinDir.resolve("lldb").setExecutable(true)
+                lldbMacBinDir.resolve("LLDBFrontend").setExecutable(true)
+                lldbMacBinDir.resolve("LLDB.framework").resolve("LLDB").setExecutable(true)
+            }
+
+            runCommand.execute("pretty_printers_tests")
+        }
 
         val gdbBinary = when {
             isFamily(FAMILY_MAC) -> "$projectDir/deps/${clionVersion.replaceFirst("CL", "clion")}/bin/gdb/mac/bin/gdb"
             isFamily(FAMILY_UNIX) -> "$projectDir/deps/${clionVersion.replaceFirst("CL", "clion")}/bin/gdb/linux/bin/gdb"
+            isFamily(FAMILY_WINDOWS) -> {
+                println("GDB pretty-printers tests are not supported yet for Windows")
+                return@doLast
+            }
             else -> error("Unsupported OS")
         }
+        // TODO: Remove after CLion snapshot builds provide this file with required permissions
+        File(gdbBinary).setExecutable(true)
+
         "cargo run --package pretty_printers_test --bin pretty_printers_test -- gdb $gdbBinary".execute("pretty_printers_tests")
     }
 }
@@ -627,10 +675,13 @@ task("updateCompilerFeatures") {
                 package org.rust.lang.core
 
                 import org.rust.lang.core.FeatureState.ACCEPTED
+                import org.rust.lang.core.FeatureState.INCOMPLETE
                 import org.rust.lang.core.FeatureState.ACTIVE
 
             """.trimIndent())
             it.writeFeatures("active", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/active.rs")
+            it.writeln()
+            it.writeFeatures("incomplete", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/active.rs")
             it.writeln()
             it.writeFeatures("accepted", "https://raw.githubusercontent.com/rust-lang/rust/master/compiler/rustc_feature/src/accepted.rs")
         }
@@ -826,4 +877,31 @@ fun List<String>.execute(wd: String? = null, ignoreExitCode: Boolean = false, pr
     errReader.join()
     if (process.exitValue() != 0 && !ignoreExitCode) error("Non-zero exit status for `$this`")
     return result
+}
+
+fun File.isPluginJar(): Boolean {
+    if (!isFile) return false
+    if (extension != "jar") return false
+    return zipTree(this).files.any { it.isManifestFile() }
+}
+
+fun File.isManifestFile(): Boolean {
+    if (extension != "xml") return false
+    val rootNode = try {
+        val parser = XmlParser()
+        parser.parse(this)
+    } catch (e: Exception) {
+        logger.error("Failed to parse $path", e)
+        return false
+    }
+    return rootNode.name() == "idea-plugin"
+}
+
+fun <T : ModuleDependency> T.excludeKotlinDeps() {
+    exclude(module = "kotlin-reflect")
+    exclude(module = "kotlin-runtime")
+    exclude(module = "kotlin-stdlib")
+    exclude(module = "kotlin-stdlib-common")
+    exclude(module = "kotlin-stdlib-jdk8")
+    exclude(module = "kotlinx-serialization-core")
 }

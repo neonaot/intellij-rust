@@ -5,8 +5,10 @@
 
 package org.rust.ide.intentions
 
+import org.rust.ExpandMacros
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
+import org.rust.lang.core.macros.MacroExpansionScope
 
 class ConvertClosureToFunctionIntentionTest : RsIntentionTestBase(ConvertClosureToFunctionIntention::class) {
 
@@ -47,6 +49,7 @@ class ConvertClosureToFunctionIntentionTest : RsIntentionTestBase(ConvertClosure
     """)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test intention adds return type to function when closure doesnt have one`() = doAvailableTest("""
         fn main() {
             let foo = |x: i32/*caret*/| x + 1;
@@ -112,6 +115,22 @@ class ConvertClosureToFunctionIntentionTest : RsIntentionTestBase(ConvertClosure
 
         fn main() {
             fn foo(s: S) -> S { s }/*caret*/
+        }
+    """)
+
+    fun `test infer generic type`() = doAvailableTest("""
+        struct Wrap<T>(T);
+
+        fn main() {
+            let /*caret*/foo = |x: Wrap<_>| x;
+            let _: Wrap<i8> = foo(Wrap(3_i8));
+        }
+    """, """
+        struct Wrap<T>(T);
+
+        fn main() {
+            fn foo(x: Wrap<i8>) -> Wrap<i8> { x }
+            let _: Wrap<i8> = foo(Wrap(3_i8));
         }
     """)
 }

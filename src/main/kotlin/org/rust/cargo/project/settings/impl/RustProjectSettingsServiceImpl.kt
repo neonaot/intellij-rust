@@ -11,7 +11,6 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.StoragePathMacros
-import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.psi.PsiManager
@@ -26,7 +25,7 @@ import org.rust.cargo.project.settings.RustProjectSettingsService.Companion.RUST
 import org.rust.cargo.toolchain.ExternalLinter
 import org.rust.cargo.toolchain.RsToolchain
 import org.rust.cargo.toolchain.RsToolchainBase
-import org.rust.lang.core.resolve2.defMapService
+import org.rust.openapiext.showSettingsDialog
 
 private const val serviceName: String = "RustProjectSettings"
 
@@ -61,12 +60,9 @@ class RustProjectSettingsServiceImpl(
     override val compileAllTargets: Boolean get() = _state.compileAllTargets
     override val useOffline: Boolean get() = _state.useOffline
     override val macroExpansionEngine: MacroExpansionEngine get() = _state.macroExpansionEngine
-    override val newResolveEnabled: Boolean get() = _state.newResolveEnabled
     override val doctestInjectionEnabled: Boolean get() = _state.doctestInjectionEnabled
-    override val useRustfmt: Boolean get() = _state.useRustfmt
-    override val runRustfmtOnSave: Boolean get() = _state.runRustfmtOnSave
 
-    @Suppress("OverridingDeprecatedMember", "DEPRECATION")
+    @Suppress("OverridingDeprecatedMember", "DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun getToolchain(): RsToolchain? = _state.toolchain?.let(RsToolchain::from)
 
     override fun getState(): Element {
@@ -79,6 +75,10 @@ class RustProjectSettingsServiceImpl(
         val rawState = element.clone()
         rawState.updateToCurrentVersion()
         deserializeInto(_state, rawState)
+
+        if (_state.macroExpansionEngine == MacroExpansionEngine.OLD) {
+            _state.macroExpansionEngine = MacroExpansionEngine.NEW
+        }
     }
 
     override fun modify(action: (State) -> Unit) {
@@ -88,14 +88,14 @@ class RustProjectSettingsServiceImpl(
     @TestOnly
     override fun modifyTemporary(parentDisposable: Disposable, action: (State) -> Unit) {
         val oldState = settingsState
-        settingsState = oldState.also(action)
+        settingsState = oldState.copy().also(action)
         Disposer.register(parentDisposable) {
             _state = oldState
         }
     }
 
     override fun configureToolchain() {
-        ShowSettingsUtil.getInstance().showSettingsDialog(project, RsProjectConfigurable::class.java)
+        project.showSettingsDialog<RsProjectConfigurable>()
     }
 
     private fun notifySettingsChanged(oldState: State, newState: State) {
@@ -105,9 +105,6 @@ class RustProjectSettingsServiceImpl(
         if (event.isChanged(State::doctestInjectionEnabled)) {
             // flush injection cache
             PsiManager.getInstance(project).dropPsiCaches()
-        }
-        if (event.isChanged(State::newResolveEnabled)) {
-            project.defMapService.onNewResolveEnabledChanged(newState.newResolveEnabled)
         }
         if (event.affectsHighlighting) {
             DaemonCodeAnalyzer.getInstance(project).restart()

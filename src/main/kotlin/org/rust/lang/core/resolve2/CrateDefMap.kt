@@ -5,31 +5,33 @@
 
 package org.rust.lang.core.resolve2
 
-import com.google.common.annotations.VisibleForTesting
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileWithId
-import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
 import com.intellij.psi.FileViewProvider
 import com.intellij.psi.PsiFile
-import com.intellij.util.SmartList
 import com.intellij.util.containers.map2Array
 import gnu.trove.THashMap
+import gnu.trove.TObjectHashingStrategy
+import org.rust.cargo.project.settings.getMaximumRecursionLimit
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.lang.core.crate.CratePersistentId
-import org.rust.lang.core.psi.RsEnumVariant
-import org.rust.lang.core.psi.RsFile
-import org.rust.lang.core.psi.RsProcMacroKind
+import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.RsMod
 import org.rust.lang.core.resolve.Namespace
 import org.rust.lang.core.resolve2.Visibility.*
+import org.rust.lang.core.resolve2.util.GlobImportGraph
 import org.rust.lang.core.resolve2.util.PerNsHashMap
+import org.rust.lang.core.resolve2.util.SmartListMap
 import org.rust.openapiext.fileId
-import org.rust.openapiext.testAssert
 import org.rust.stdext.HashCode
+import org.rust.stdext.writeVarInt
+import java.io.DataOutput
+import java.io.IOException
 import java.nio.file.Path
 import java.util.*
+import kotlin.math.min
 
 class CrateDefMap(
     val crate: CratePersistentId,
@@ -39,20 +41,25 @@ class CrateDefMap(
     /** Used only by `extern crate crate_name;` declarations */
     val directDependenciesDefMaps: Map<String, CrateDefMap>,
     private val allDependenciesDefMaps: Map<CratePersistentId, CrateDefMap>,
-    /**
-     * The prelude module for this crate. This either comes from an import
-     * marked with the `prelude_import` attribute, or (in the normal case) from
-     * a dependency (`std` or `core`).
-     */
-    var prelude: ModData?,
+    initialExternPrelude: Map<String, CrateDefMap>,
     val metaData: CrateMetaData,
     /** Equal to `root.macroIndex.single()` */
     val rootModMacroIndex: Int,
+    /** Attributes of root module */
+    val stdlibAttributes: RsFile.Attributes,
+    // https://doc.rust-lang.org/reference/attributes/limits.html#the-recursion_limit-attribute
+    val recursionLimitRaw: Int,
     /** Only for debug */
     val crateDescription: String,
 ) {
+    /** The prelude module for this crate. See [injectPrelude] */
+    var prelude: ModData? = null
+
     /** It is needed at least to handle `extern crate name as alias;` */
-    val externPrelude: MutableMap<String, CrateDefMap> = directDependenciesDefMaps.toMap(hashMapOf())
+    val externPrelude: MutableMap<String, CrateDefMap> = initialExternPrelude.toMap(hashMapOf())
+
+    /** List of `extern crate` declarations in crate root. Needed only for 2015 edition. */
+    val externCratesInRoot: MutableMap<String, CrateDefMap> = hashMapOf()
 
     /**
      * File included via `include!` macro has same [FileInfo.modData] as main file,
@@ -69,40 +76,47 @@ class CrateDefMap(
      */
     val missedFiles: MutableList<Path> = mutableListOf()
 
-    @VisibleForTesting
     val timestamp: Long = System.nanoTime()
 
     /** Stored as memory optimization */
     val rootAsPerNs: PerNs = PerNs.types(VisItem(root.path, Public, true))
 
+    val globImportGraph: GlobImportGraph = GlobImportGraph()
+
+    val expansionNameToMacroCall: MutableMap<String, MacroCallLightInfo> = THashMap()
+    val macroCallToExpansionName: MutableMap<MacroIndex, String> = THashMap(object : TObjectHashingStrategy<MacroIndex> {
+        override fun equals(index1: MacroIndex, index2: MacroIndex): Boolean = MacroIndex.equals(index1, index2)
+        override fun computeHashCode(index: MacroIndex): Int = MacroIndex.hashCode(index)
+    })
+
+    val isAtLeastEdition2018: Boolean
+        get() = metaData.edition >= Edition.EDITION_2018
+
+    val recursionLimit: Int get() = min(recursionLimitRaw, getMaximumRecursionLimit())
+
     fun getDefMap(crate: CratePersistentId): CrateDefMap? =
         if (crate == this.crate) this else allDependenciesDefMaps[crate]
 
-    fun getModData(path: ModPath): ModData? {
-        val defMap = getDefMap(path.crate) ?: error("Can't find ModData for path $path")
-        return defMap.doGetModData(path)
+    fun getModData(path: ModPath, hangingModData: ModData? = null): ModData? {
+        return if (hangingModData == null) {
+            val defMap = getDefMap(path.crate) ?: error("Can't find ModData for path $path")
+            defMap.root.getChildModData(path.segments)
+        } else {
+            findHangingModData(path, hangingModData)
+                ?: getModData(path, hangingModData.context)
+        }
     }
 
-    private fun doGetModData(path: ModPath): ModData? {
-        check(crate == path.crate)
-        return path.segments
-            .fold(root as ModData?) { modData, segment -> modData?.childModules?.get(segment) }
-            .also { testAssert({ it != null }, { "Can't find ModData for $path in crate $crateDescription" }) }
-    }
-
-    // TODO: Possible optimization - store in [CrateDefMap] map from [String] (mod path) to [ModData]
-    fun tryCastToModData(types: VisItem): ModData? {
+    fun tryCastToModData(types: VisItem, hangingModData: ModData? = null): ModData? {
         if (!types.isModOrEnum) return null
-        return getModData(types.path)
+        return getModData(types.path, hangingModData)
     }
 
     fun getModData(mod: RsMod): ModData? {
         if (mod is RsFile) {
             val virtualFile = mod.originalFile.virtualFile ?: return null
+            if (virtualFile !is VirtualFileWithId) return null
             val fileInfo = fileInfos[virtualFile.fileId]
-            // TODO: Exception here does not fail [RsBuildDefMapTest]
-            // Note: we don't expand cfg-disabled macros (it can contain mod declaration)
-            testAssert({ fileInfo != null || !mod.isDeeplyEnabledByCfg }, { "todo" })
             return fileInfo?.modData
         }
         val parentMod = mod.`super` ?: return null
@@ -110,16 +124,17 @@ class CrateDefMap(
         return parentModData.childModules[mod.modName]
     }
 
-    fun getMacroInfo(macroDef: VisItem): MacroDefInfo {
-        val defMap = getDefMap(macroDef.crate) ?: error("Can't find DefMap for macro $macroDef")
+    fun getMacroInfo(macroDef: VisItem): MacroDefInfo? {
+        val defMap = getDefMap(macroDef.crate) ?: return null
         return defMap.doGetMacroInfo(macroDef)
     }
 
-    private fun doGetMacroInfo(macroDef: VisItem): MacroDefInfo {
-        val containingMod = getModData(macroDef.containingMod) ?: error("Can't find ModData for macro $macroDef")
+    private fun doGetMacroInfo(macroDef: VisItem): MacroDefInfo? {
+        val containingMod = getModData(macroDef.containingMod) ?: return null
         val procMacroKind = containingMod.procMacros[macroDef.name]
         if (procMacroKind != null) {
-            return ProcMacroDefInfo(containingMod.crate, macroDef.path, procMacroKind, metaData.procMacroArtifact)
+            val knownKind = getHardcodeProcMacroProperties(metaData.name, macroDef.name)
+            return ProcMacroDefInfo(containingMod.crate, macroDef.path, procMacroKind, metaData.procMacroArtifact, knownKind)
         }
         containingMod.macros2[macroDef.name]?.let {
             return it
@@ -151,6 +166,8 @@ class CrateDefMap(
         val fileId = file.virtualFile.fileId
         // TODO: File included in module tree multiple times ?
         // testAssert { fileId !in fileInfos }
+        val existing = fileInfos[fileId]
+        if (existing != null && !modData.isDeeplyEnabledByCfg && existing.modData.isDeeplyEnabledByCfg) return
         fileInfos[fileId] = FileInfo(file.modificationStampForResolve, modData, fileHash)
     }
 
@@ -202,9 +219,22 @@ class FileInfo(
  */
 @Suppress("EXPERIMENTAL_FEATURE_WARNING")
 inline class MacroIndex(private val indices: IntArray) : Comparable<MacroIndex> {
+
+    val parent: MacroIndex get() = MacroIndex(indices.copyOfRange(0, indices.size - 1))
+    val last: Int get() = indices.last()
+
     fun append(index: Int): MacroIndex = MacroIndex(indices + index)
+    fun append(index: MacroIndex): MacroIndex = MacroIndex(indices + index.indices)
 
     override fun compareTo(other: MacroIndex): Int = Arrays.compare(indices, other.indices)
+
+    @Throws(IOException::class)
+    fun writeTo(data: DataOutput) {
+        data.writeVarInt(indices.size)
+        for (index in indices) {
+            data.writeVarInt(index)
+        }
+    }
 
     companion object {
         /** Equivalent to `call < mod && !isPrefix(call, mod)` */
@@ -218,6 +248,8 @@ inline class MacroIndex(private val indices: IntArray) : Comparable<MacroIndex> 
         }
 
         fun equals(index1: MacroIndex, index2: MacroIndex): Boolean = index1.indices.contentEquals(index2.indices)
+
+        fun hashCode(index: MacroIndex): Int = index.indices.contentHashCode()
     }
 
     override fun toString(): String = indices.contentToString()
@@ -239,7 +271,7 @@ class ModData(
     val isDeeplyEnabledByCfgOuter: Boolean,
     val isEnabledByCfgInner: Boolean,
     /** id of containing file */
-    val fileId: FileId,
+    val fileId: FileId?,
     // TODO: Possible optimization - store as Array<String>
     /** Starts with :: */
     val fileRelativePath: String,
@@ -248,6 +280,10 @@ class ModData(
     val hasPathAttribute: Boolean,
     val hasMacroUse: Boolean,
     val isEnum: Boolean = false,
+    /** Normal cargo crate with physical crate root, etc */
+    val isNormalCrate: Boolean = true,
+    /** not-null when `this` corresponds to [RsBlock]. See [getHangingModInfo] */
+    val context: ModData? = null,
     /** Only for debug */
     val crateDescription: String,
 ) {
@@ -270,10 +306,9 @@ class ModData(
     /**
      * Macros visible in current module in legacy textual scope.
      * Module scoped macros will be inserted into [visibleItems] instead of here.
-     * Currently stores only cfg-enabled macros.
+     * Currently, stores only cfg-enabled macros.
      */
-    // TODO: Custom map? (Profile memory usage)
-    val legacyMacros: THashMap<String, SmartList<MacroDefInfo>> = THashMap()
+    val legacyMacros: SmartListMap<String, MacroDefInfo> = SmartListMap()
 
     /** Explicitly declared macros 2.0 (`pub macro $name ...`) */
     val macros2: MutableMap<String, DeclMacro2DefInfo> = THashMap()
@@ -294,7 +329,11 @@ class ModData(
 
     lateinit var asVisItem: VisItem
 
-    var directoryContainedAllChildFiles: FileId = ownedDirectoryId ?: parent!!.directoryContainedAllChildFiles
+    var directoryContainedAllChildFiles: FileId? = if (isNormalCrate) {
+        ownedDirectoryId ?: parent!!.directoryContainedAllChildFiles
+    } else {
+        null
+    }
 
     /**
      * Means that mod declaration has path attribute or any parent inline mod
@@ -306,6 +345,8 @@ class ModData(
             parent.isRsFile -> hasPathAttribute
             else -> parent.hasPathAttributeRelativeToParentFile || hasPathAttribute
         }
+
+    val timestamp: Long = System.nanoTime()
 
     fun getVisibleItem(name: String): PerNs = visibleItems.getOrDefault(name, PerNs.Empty)
 
@@ -333,7 +374,12 @@ class ModData(
         return asVisItem
     }
 
-    fun asPerNs(): PerNs = PerNs.types(asVisItem())
+    fun asPerNs(): PerNs = context?.asPerNs() ?: PerNs.types(asVisItem())
+
+    fun getChildModData(relativePath: Array<String>): ModData? =
+        relativePath.fold(this as ModData?) { modData, segment ->
+            modData?.childModules?.get(segment)
+        }
 
     fun getNthParent(n: Int): ModData? {
         check(n >= 0)
@@ -345,8 +391,7 @@ class ModData(
     }
 
     fun addLegacyMacro(name: String, defInfo: MacroDefInfo) {
-        val existing = legacyMacros.putIfAbsent(name, SmartList(defInfo)) ?: return
-        existing += defInfo
+        legacyMacros.addValue(name, defInfo)
     }
 
     fun addLegacyMacros(defs: Map<String, DeclMacroDefInfo>) {
@@ -359,18 +404,6 @@ class ModData(
         visitor(this)
         for (childMod in childModules.values) {
             childMod.visitDescendants(visitor)
-        }
-    }
-
-    fun recordChildFileInUnusualLocation(childFileId: FileId) {
-        val persistentFS = PersistentFS.getInstance()
-        val childFile = persistentFS.findFileById(childFileId) ?: return
-        val childDirectory = childFile.parent ?: return
-        val containedDirectory = persistentFS.findFileById(directoryContainedAllChildFiles) ?: return
-        if (!VfsUtil.isAncestor(containedDirectory, childDirectory, false)) {
-            VfsUtil.getCommonAncestor(containedDirectory, childDirectory)?.let {
-                directoryContainedAllChildFiles = it.fileId
-            }
         }
     }
 
@@ -446,6 +479,20 @@ class PerNs(
         )
     }
 
+    fun getVisItems(namespace: Namespace): Array<VisItem> = when (namespace) {
+        Namespace.Types -> types
+        Namespace.Values -> values
+        Namespace.Macros -> macros
+        Namespace.Lifetimes -> emptyArray()
+    }
+
+    fun getVisItemsByNamespace(): Array<Pair<Array<VisItem>, Namespace>> =
+        arrayOf(
+            types to Namespace.Types,
+            values to Namespace.Values,
+            macros to Namespace.Macros,
+        )
+
     /** Needed to compare [PartialResolvedImport] in [DefCollector.resolveImports] */
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -507,10 +554,11 @@ data class VisItem(
     val containingMod: ModPath get() = path.parent
     val name: String get() = path.name
     val crate: CratePersistentId get() = path.crate
+    val isCrateRoot: Boolean get() = path.segments.isEmpty()
 
     fun adjust(visibilityNew: Visibility, isFromNamedImport: Boolean): VisItem =
         copy(
-            visibility = if (visibility.isInvisible) visibility else visibilityNew,
+            visibility = visibilityNew.intersect(visibility),
             isFromNamedImport = isFromNamedImport
         )
 
@@ -570,6 +618,8 @@ sealed class Visibility {
         }
     }
 
+    fun intersect(other: Visibility): Visibility = if (isStrictlyMorePermissive(other)) other else this
+
     val type: VisibilityType
         get() = when (this) {
             Public -> VisibilityType.Normal
@@ -610,12 +660,12 @@ class ModPath(
     fun append(segment: String): ModPath = ModPath(crate, segments + segment)
 
     /** `mod1::mod2` isSubPathOf `mod1::mod2::mod3` */
-    fun isSubPathOf(other: ModPath): Boolean {
-        if (crate != other.crate) return false
+    fun isSubPathOf(child: ModPath): Boolean {
+        if (crate != child.crate) return false
 
-        if (segments.size > other.segments.size) return false
+        if (segments.size > child.segments.size) return false
         for (index in segments.indices) {
-            if (segments[index] != other.segments[index]) return false
+            if (segments[index] != child.segments[index]) return false
         }
         return true
     }

@@ -11,7 +11,7 @@ import org.rust.ExpandMacros
 import org.rust.MockEdition
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.lang.core.psi.RsBaseType
 import org.rust.lang.core.psi.RsConstant
 import org.rust.lang.core.psi.ext.RsElement
@@ -46,6 +46,52 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         pub fn <b>foo</b>()</pre></div>
     """)
 
+    fun `test pub(crate) fn`() = doTest("""
+        pub(crate) fn foo() {}
+                     //^
+    """, """
+        <div class='definition'><pre>test_package
+        pub(crate) fn <b>foo</b>()</pre></div>
+    """)
+
+    fun `test pub(self) fn`() = doTest("""
+        pub(self) fn foo() {}
+                     //^
+    """, """
+        <div class='definition'><pre>test_package
+        pub(self) fn <b>foo</b>()</pre></div>
+    """)
+
+    fun `test pub(super) fn`() = doTest("""
+        mod bar {
+            pub(super) fn foo() {}
+                         //^
+        }
+    """, """
+        <div class='definition'><pre>test_package::bar
+        pub(super) fn <b>foo</b>()</pre></div>
+    """)
+
+    fun `test crate fn`() = doTest("""
+        mod bar {
+            crate fn foo() {}
+                    //^
+        }
+    """, """
+        <div class='definition'><pre>test_package::bar
+        crate fn <b>foo</b>()</pre></div>
+    """)
+
+    fun `test pub(in crate-bar) fn`() = doTest("""
+        mod bar {
+            pub(in crate::bar) fn foo() {}
+                                //^
+        }
+    """, """
+        <div class='definition'><pre>test_package::bar
+        pub(in crate::bar) fn <b>foo</b>()</pre></div>
+    """)
+
     fun `test const fn`() = doTest("""
         const fn foo() {}
                  //^
@@ -56,7 +102,7 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
 
     fun `test unsafe fn`() = doTest("""
         unsafe fn foo() {}
-                  //^
+                 //^
     """, """
         <div class='definition'><pre>test_package
         unsafe fn <b>foo</b>()</pre></div>
@@ -686,8 +732,7 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         Module level docs</p></div>
     """)
 
-    //
-    fun `test macro outer docstring`() = doTest("""
+    fun `test macro outer docstring 1`() = doTest("""
         /// Outer documentation
         macro_rules! makro {
                    //^
@@ -702,16 +747,48 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         <div class='content'><p>Outer documentation</p></div>
     """)
 
-    fun `test macro 2 outer docs`() = doTest("""
+    fun `test macro outer docstring 2`() = doTest("""
+        pub mod foo {
+            /// Outer documentation
+            macro_rules! makro {
+                       //^
+                () => { };
+            }
+        }
+
+        fn main() {
+        }
+    """, """
+        <div class='definition'><pre>test_package
+        macro <b>makro</b></pre></div>
+        <div class='content'><p>Outer documentation</p></div>
+    """)
+
+    fun `test macro 2 outer docs 1`() = doTest("""
         pub struct Foo;
 
         /// Outer doc
         /// [link](Foo)
-        pub macro Bar() {}
+        pub macro bar() {}
                  //^
     """, """
-        <div class='definition'><pre>test_package::Bar
-        </pre></div>
+        <div class='definition'><pre>test_package
+        pub macro <b>bar</b></pre></div>
+        <div class='content'><p>Outer doc
+        <a href="psi_element://Foo">link</a></p></div>
+    """)
+
+    fun `test macro 2 outer docs 2`() = doTest("""
+        pub mod foo_bar {
+            pub struct Foo;
+
+            /// Outer doc
+            /// [link](Foo)
+            pub macro bar() {}
+        }           //^
+    """, """
+        <div class='definition'><pre>test_package::foo_bar
+        pub macro <b>bar</b></pre></div>
         <div class='content'><p>Outer doc
         <a href="psi_element://Foo">link</a></p></div>
     """)
@@ -1121,7 +1198,6 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         keyword <b>enum</b></pre></div><div class='content'><p>.+</p></div>
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test async keyword doc`() = doTestRegex("""
         async fn foo() {}
@@ -1152,7 +1228,7 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         keyword <b>false</b></pre></div><div class='content'><p>.+</p></div>
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2015)
+    @MockEdition(Edition.EDITION_2015)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test await doc 1`() = doTest("""
         fn main() {
@@ -1161,7 +1237,6 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         }
     """, null)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test await doc 2`() = doTestRegex("""
         fn main() {
@@ -1260,6 +1335,14 @@ class RsQuickDocumentationTest : RsDocumentationProviderTest() {
         fn <b>foo</b>()</pre></div>
         <div class='content'><p>Some docs</p></div>
     """)
+
+    // https://github.com/intellij-rust/intellij-rust/issues/8732
+    fun `test do not throw exceptions on fake psi elements`() = doTest("""
+        fn main() {
+            let s = "http://localhost:8080";
+                             //^
+        }
+    """, null)
 
     private fun doTest(@Language("Rust") code: String, @Language("Html") expected: String?)
         = doTest(code, expected, block = RsDocumentationProvider::generateDoc)

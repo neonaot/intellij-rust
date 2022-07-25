@@ -5,6 +5,8 @@
 
 package org.rust.lang.core.crate.impl
 
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.model.CargoProject
@@ -16,20 +18,21 @@ import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.crate.crateGraph
 import org.rust.lang.core.psi.RsFile
+import org.rust.lang.core.resolve2.DefMapService
 
 class DoctestCrate(
     private val parentCrate: Crate,
     override val rootMod: RsFile,
     override val dependencies: Collection<Crate.Dependency>
-) : Crate {
+) : UserDataHolderBase(), Crate {
     override val flatDependencies: LinkedHashSet<Crate> = dependencies.flattenTopSortedDeps()
 
     override val reverseDependencies: List<Crate> get() = emptyList()
 
-    override val id: CratePersistentId? get() = null
-    override val cargoProject: CargoProject get() = parentCrate.cargoProject
+    override val id: CratePersistentId = DefMapService.getNextNonCargoCrateId()
+    override val cargoProject: CargoProject? get() = parentCrate.cargoProject
     override val cargoTarget: CargoWorkspace.Target? get() = null
-    override val cargoWorkspace: CargoWorkspace get() = parentCrate.cargoWorkspace
+    override val cargoWorkspace: CargoWorkspace? get() = parentCrate.cargoWorkspace
     override val kind: CargoWorkspace.TargetKind get() = CargoWorkspace.TargetKind.Test
 
     override val cfgOptions: CfgOptions get() = CfgOptions.EMPTY
@@ -44,6 +47,7 @@ class DoctestCrate(
     override val areDoctestsEnabled: Boolean get() = false
     override val presentableName: String get() = parentCrate.presentableName + "-doctest"
     override val normName: String get() = parentCrate.normName + "_doctest"
+    override val project: Project get() = parentCrate.project
     override val procMacroArtifact: CargoWorkspaceData.ProcMacroArtifact? get() = null
 
     override fun toString(): String = "Doctest in ${parentCrate.cargoTarget?.name}"
@@ -56,7 +60,7 @@ class DoctestCrate(
                 DoctestCrate(parentCrate, doctestModule, dependencies)
             } else {
                 // A doctest located in the stdlib is depending on all stdlib crates
-                val stdCrates = parentCrate.cargoProject.project.crateGraph.topSortedCrates
+                val stdCrates = parentCrate.project.crateGraph.topSortedCrates
                     .filter { it.origin == PackageOrigin.STDLIB }
                     .map { Crate.Dependency(it.normName, it) }
                     .distinctBy { it.normName }

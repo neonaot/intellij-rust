@@ -24,13 +24,17 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.NlsContexts
+import com.intellij.openapi.util.NlsContexts.DialogTitle
 import org.jetbrains.concurrency.AsyncPromise
 import org.jetbrains.concurrency.Promise
 import org.rust.cargo.runconfig.*
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.getBuildConfiguration
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildConfiguration
-import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowEnabled
+import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowAvailable
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.cargo.runconfig.command.hasRemoteTarget
+import org.rust.cargo.runconfig.target.localBuildArgsForRemoteRun
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.toolchain.impl.CargoMetadata
 import org.rust.cargo.toolchain.impl.CompilerArtifactMessage
@@ -39,20 +43,22 @@ import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.cargo.util.CargoArgsParser.Companion.parseArgs
 import org.rust.openapiext.JsonUtils.tryParseJsonObject
 import org.rust.openapiext.saveAllDocuments
+import org.rust.stdext.unwrapOrThrow
 import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * This runner is used if [isBuildToolWindowEnabled] is false.
+ * This runner is used if [isBuildToolWindowAvailable] is false.
  */
 abstract class RsAsyncRunner(
     private val executorId: String,
-    private val errorMessageTitle: String
+    @Suppress("UnstableApiUsage") @DialogTitle private val errorMessageTitle: String
 ) : AsyncProgramRunner<RunnerSettings>() {
     override fun canRun(executorId: String, profile: RunProfile): Boolean {
         if (executorId != this.executorId || profile !is CargoCommandConfiguration ||
             profile.clean() !is CargoCommandConfiguration.CleanConfiguration.Ok) return false
-        return !profile.isBuildToolWindowEnabled &&
+        return !profile.hasRemoteTarget &&
+            !profile.isBuildToolWindowAvailable &&
             !isBuildConfiguration(profile) &&
             getBuildConfiguration(profile) != null
     }
@@ -64,14 +70,15 @@ abstract class RsAsyncRunner(
 
         val commandLine = state.prepareCommandLine(getCargoCommonPatch(environment.project))
         val (commandArguments, executableArguments) = parseArgs(commandLine.command, commandLine.additionalArguments)
+        val additionalBuildArgs = state.runConfiguration.localBuildArgsForRemoteRun
 
         val isTestRun = commandLine.command == "test"
         val cmdHasNoRun = "--no-run" in commandLine.additionalArguments
         val buildCommand = if (isTestRun) {
             if (cmdHasNoRun) commandLine else commandLine.prependArgument("--no-run")
         } else {
-            commandLine.copy(command = "build", additionalArguments = commandArguments)
-        }.copy(emulateTerminal = false, withSudo = false) // building does not require root privileges
+            commandLine.copy(command = "build", additionalArguments = commandArguments + additionalBuildArgs)
+        }.copy(withSudo = false) // building does not require root privileges
 
         val getRunCommand = { executablePath: Path ->
             with(commandLine) {
@@ -82,7 +89,7 @@ abstract class RsAsyncRunner(
                     backtraceMode,
                     environmentVariables,
                     executableArguments,
-                    emulateTerminal,
+                    false, // emulateTerminal
                     withSudo,
                     patchToRemote = false // patching is performed for debugger/profiler/valgrind on CLion side if needed
                 )
@@ -163,9 +170,10 @@ abstract class RsAsyncRunner(
                             result = checkToolchainSupported(project, host)
                             if (result != null) return
 
-                            val processForJson = RsCapturingProcessHandler(
-                                cargo.toGeneralCommandLine(project, command.prependArgument("--message-format=json"))
-                            )
+                            val jsonCommand = command.prependArgument("--message-format=json").copy(emulateTerminal = false)
+                            val processForJson = RsCapturingProcessHandler.startProcess(
+                                cargo.toGeneralCommandLine(project, jsonCommand)
+                            ).unwrapOrThrow()
                             processForJson.setHasPty(toolchain is RsWslToolchain)
                             val output = processForJson.runProcessWithProgressIndicator(indicator)
                             if (output.isCancelled || output.exitCode != 0) {
@@ -226,7 +234,7 @@ abstract class RsAsyncRunner(
         return promise
     }
 
-    protected fun Project.showErrorDialog(message: String) {
+    protected fun Project.showErrorDialog(@Suppress("UnstableApiUsage") @NlsContexts.DialogMessage message: String) {
         Messages.showErrorDialog(this, message, errorMessageTitle)
     }
 

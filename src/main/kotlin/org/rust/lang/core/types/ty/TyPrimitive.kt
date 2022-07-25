@@ -6,8 +6,10 @@
 package org.rust.lang.core.types.ty
 
 import com.intellij.psi.PsiElement
+import org.rust.lang.core.psi.RsBaseType
 import org.rust.lang.core.psi.RsPath
 import org.rust.lang.core.psi.RsTypeAlias
+import org.rust.lang.core.psi.ext.RsMod
 import org.rust.lang.core.types.BoundElement
 import org.rust.lang.core.types.infer.TypeFolder
 
@@ -29,11 +31,33 @@ sealed class TyPrimitive : Ty() {
         }
     }
 
+    override fun isEquivalentToInner(other: Ty): Boolean {
+        return javaClass == other.javaClass
+    }
+
     companion object {
-        fun fromPath(path: RsPath): TyPrimitive? {
-            if (path.hasColonColon) return null
+        fun fromPath(path: RsPath, checkResolve: Boolean = true): TyPrimitive? {
             val name = path.referenceName ?: return null
 
+            val result = fromName(name) ?: return null
+
+            if (path.hasColonColon || path.typeQual != null) return null
+            val parent = path.parent
+            if (parent !is RsBaseType && parent !is RsPath) return null
+
+            // struct u8;
+            // let a: u8; // this is a struct "u8", not a primitive type "u8"
+            if (checkResolve) {
+                val pathReference = path.reference ?: return null
+                val resolvedTo = pathReference.multiResolve()
+                if (parent is RsBaseType && resolvedTo.any { it !is RsMod }) return null
+                if (parent is RsPath && resolvedTo.isNotEmpty()) return null
+            }
+
+            return result
+        }
+
+        private fun fromName(name: String): TyPrimitive? {
             TyInteger.fromName(name)?.let { return it }
             TyFloat.fromName(name)?.let { return it }
 

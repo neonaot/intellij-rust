@@ -7,7 +7,6 @@ package org.rust.ide.intentions
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiElement
 import org.rust.lang.core.psi.RsModDeclItem
 import org.rust.lang.core.psi.RsModItem
@@ -15,6 +14,7 @@ import org.rust.lang.core.psi.RsPsiFactory
 import org.rust.lang.core.psi.ext.ancestorOrSelf
 import org.rust.lang.core.psi.ext.getOrCreateModuleFile
 import org.rust.lang.core.psi.ext.isAncestorOf
+import org.rust.openapiext.Testmark
 
 //TODO: make context more precise here
 class ExtractInlineModuleIntention : RsElementBaseIntentionAction<RsModItem>() {
@@ -33,7 +33,7 @@ class ExtractInlineModuleIntention : RsElementBaseIntentionAction<RsModItem>() {
         decl = ctx.parent?.addBefore(decl, ctx) as? RsModDeclItem ?: return
 
         if (ctx.firstChild != ctx.mod) {
-            Testmarks.copyAttrs.hit()
+            Testmarks.CopyAttrs.hit()
             decl.addRangeBefore(ctx.firstChild, ctx.mod.prevSibling, decl.mod)
         }
 
@@ -48,6 +48,6 @@ class ExtractInlineModuleIntention : RsElementBaseIntentionAction<RsModItem>() {
     }
 
     object Testmarks {
-        val copyAttrs = Testmark("copyAttrs")
+        object CopyAttrs : Testmark()
     }
 }

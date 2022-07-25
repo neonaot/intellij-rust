@@ -21,9 +21,12 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.psi.util.PsiTreeUtil
 import org.rust.lang.core.macros.*
+import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.RsMacroCall
-import org.rust.lang.core.psi.ext.descendantsOfType
+import org.rust.lang.core.psi.ext.RsAttrProcMacroOwner
+import org.rust.lang.core.psi.ext.RsPossibleMacroCall
 import org.rust.lang.core.psi.ext.existsAfterExpansion
 import org.rust.lang.core.psi.ext.expansion
 import org.rust.stdext.removeLast
@@ -74,24 +77,44 @@ class RsMacroExpansionHighlightingPass(
     @Suppress("UnstableApiUsage")
     override fun doCollectInformation(progress: ProgressIndicator) {
         val macros = mutableListOf<PreparedMacroCall>()
-        for (macro in file.descendantsOfType<RsMacroCall>()) {
-            if (macro.macroArgument?.textRange?.intersects(restrictedRange) != true) continue
-            macros += macro.prepare() ?: continue
+
+        PsiTreeUtil.processElements(file) {
+            when (it) {
+                is RsMacroCall -> {
+                    if (it.macroArgument?.textRange?.intersects(restrictedRange) != true) return@processElements true
+                    macros += it.prepare() ?: return@processElements true
+                }
+                is RsAttrProcMacroOwner -> {
+                    if (it.textRange?.intersects(restrictedRange) != true) return@processElements true
+                    macros += it.procMacroAttribute.attr?.prepare() ?: return@processElements true
+                }
+            }
+            true // Continue
         }
+
         if (macros.isEmpty()) return
 
+        val crate = (file as? RsFile)?.crate
         val annotators = createAnnotators()
+
         while (macros.isNotEmpty()) {
             val macro = macros.removeLast()
-            val holder = AnnotationHolderImpl(AnnotationSession(macro.expansion.file))
+            val annotationSession = AnnotationSession(macro.expansion.file)
+                .apply { setCurrentCrate(crate) }
+
+            @Suppress("DEPRECATION")
+            val holder = AnnotationHolderImpl(annotationSession, false)
 
             for (element in macro.elementsForHighlighting) {
                 for (ann in annotators) {
                     ProgressManager.checkCanceled()
                     holder.runAnnotatorWithContext(element, ann)
                 }
+
                 if (element is RsMacroCall) {
                     macros += element.prepare() ?: continue
+                } else if (element is RsAttrProcMacroOwner) {
+                    macros += element.procMacroAttribute.attr?.prepare() ?: continue
                 }
             }
 
@@ -123,14 +146,14 @@ class RsMacroExpansionHighlightingPass(
     }
 }
 
-private fun RsMacroCall.prepare(): PreparedMacroCall? {
-    if (macroArgument == null) return null // special macros should not be highlighted
+private fun RsPossibleMacroCall.prepare(): PreparedMacroCall? {
+    if (this is RsMacroCall && macroArgument == null) return null // special macros should not be highlighted
     if (!existsAfterExpansion) return null
     val expansion = expansion ?: return null
     return PreparedMacroCall(this, expansion)
 }
 
-private data class PreparedMacroCall(val macroCall: RsMacroCall, val expansion: MacroExpansion) {
+private data class PreparedMacroCall(val macroCall: RsPossibleMacroCall, val expansion: MacroExpansion) {
     val elementsForHighlighting: List<PsiElement>
         get() {
             if (expansion.ranges.isEmpty()) return emptyList()

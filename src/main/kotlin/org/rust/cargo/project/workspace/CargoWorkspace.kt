@@ -9,8 +9,9 @@ import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.util.UserDataHolderEx
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.util.ThreeState
 import org.jetbrains.annotations.TestOnly
+import org.rust.cargo.CargoConfig
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.model.CargoProjectsService
 import org.rust.cargo.project.model.RustcInfo
@@ -19,6 +20,7 @@ import org.rust.cargo.project.workspace.PackageOrigin.*
 import org.rust.cargo.util.AutoInjectedCrates.CORE
 import org.rust.cargo.util.AutoInjectedCrates.STD
 import org.rust.openapiext.CachedVirtualFile
+import org.rust.openapiext.isUnitTestMode
 import org.rust.stdext.applyWithSymlink
 import org.rust.stdext.mapToSet
 import java.nio.file.Path
@@ -37,6 +39,7 @@ interface CargoWorkspace {
     val workspaceRoot: VirtualFile?
 
     val cfgOptions: CfgOptions
+    val cargoConfig: CargoConfig
 
     /**
      * Flatten list of packages including workspace members, dependencies, transitive dependencies
@@ -48,7 +51,14 @@ interface CargoWorkspace {
     val featureGraph: FeatureGraph
 
     fun findPackageById(id: PackageId): Package? = packages.find { it.id == id }
-    fun findPackageByName(name: String): Package? = packages.find { it.name == name || it.normName == name }
+    fun findPackageByName(name: String, isStd: ThreeState = ThreeState.UNSURE): Package? = packages.find {
+        if (it.name != name && it.normName != name) return@find false
+        when (isStd) {
+            ThreeState.YES -> it.origin == STDLIB
+            ThreeState.NO -> it.origin == WORKSPACE || it.origin == DEPENDENCY
+            ThreeState.UNSURE -> true
+        }
+    }
 
     fun findTargetByCrateRoot(root: VirtualFile): Target?
     fun isCrateRoot(root: VirtualFile) = findTargetByCrateRoot(root) != null
@@ -206,12 +216,21 @@ interface CargoWorkspace {
     enum class Edition(val presentation: String) {
         EDITION_2015("2015"),
         EDITION_2018("2018"),
-        EDITION_2021("2021")
+        EDITION_2021("2021");
+
+        companion object {
+            val DEFAULT: Edition = EDITION_2018
+        }
     }
 
     companion object {
-        fun deserialize(manifestPath: Path, data: CargoWorkspaceData, cfgOptions: CfgOptions): CargoWorkspace =
-            WorkspaceImpl.deserialize(manifestPath, data, cfgOptions)
+        fun deserialize(
+            manifestPath: Path,
+            data: CargoWorkspaceData,
+            cfgOptions: CfgOptions = CfgOptions.DEFAULT,
+            cargoConfig: CargoConfig = CargoConfig.DEFAULT,
+        ): CargoWorkspace =
+            WorkspaceImpl.deserialize(manifestPath, data, cfgOptions, cargoConfig)
     }
 }
 
@@ -221,6 +240,7 @@ private class WorkspaceImpl(
     val workspaceRootUrl: String?,
     packagesData: Collection<CargoWorkspaceData.Package>,
     override val cfgOptions: CfgOptions,
+    override val cargoConfig: CargoConfig,
     val featuresState: Map<PackageRoot, Map<FeatureName, FeatureState>>
 ) : CargoWorkspace {
 
@@ -334,6 +354,7 @@ private class WorkspaceImpl(
             workspaceRootUrl,
             newPackagesData,
             cfgOptions,
+            cargoConfig,
             featuresState
         )
 
@@ -382,6 +403,7 @@ private class WorkspaceImpl(
             workspaceRootUrl,
             packages.map { it.asPackageData() },
             cfgOptions,
+            cargoConfig,
             featuresState
         ).withDependenciesOf(this)
     }
@@ -473,6 +495,7 @@ private class WorkspaceImpl(
             workspaceRootUrl,
             newPackagesData,
             cfgOptions,
+            cargoConfig,
             featuresState
         )
 
@@ -511,6 +534,7 @@ private class WorkspaceImpl(
             pkg.asPackageData(packageEdition)
         },
         cfgOptions,
+        cargoConfig,
         featuresState
     ).withDependenciesOf(this)
 
@@ -520,6 +544,7 @@ private class WorkspaceImpl(
         workspaceRootUrl,
         packages.map { it.asPackageData() },
         cfgOptions,
+        cargoConfig,
         featuresState
     ).withDependenciesOf(this)
 
@@ -533,6 +558,7 @@ private class WorkspaceImpl(
             workspaceRootUrl,
             packages.map { it.asPackageData().copy(features = packageToFeatures[it].orEmpty(), enabledFeatures = packageToFeatures[it].orEmpty().keys) },
             cfgOptions,
+            cargoConfig,
             featuresState
         ).withDependenciesOf(this).withDisabledFeatures(UserDisabledFeatures.EMPTY)
     }
@@ -543,14 +569,26 @@ private class WorkspaceImpl(
     }
 
     companion object {
-        fun deserialize(manifestPath: Path, data: CargoWorkspaceData, cfgOptions: CfgOptions): WorkspaceImpl {
+        fun deserialize(
+            manifestPath: Path,
+            data: CargoWorkspaceData,
+            cfgOptions: CfgOptions,
+            cargoConfig: CargoConfig,
+        ): WorkspaceImpl {
             // Packages form mostly a DAG. "Why mostly?", you say.
             // Well, a dev-dependency `X` of package `P` can depend on the `P` itself.
             // This is ok, because cargo can compile `P` (without `X`, because dev-deps
             // are used only for tests), then `X`, and then `P`s tests. So we need to
             // handle cycles here.
 
-            val result = WorkspaceImpl(manifestPath, data.workspaceRootUrl, data.packages, cfgOptions, emptyMap())
+            val result = WorkspaceImpl(
+                manifestPath,
+                data.workspaceRootUrl,
+                data.packages,
+                cfgOptions,
+                cargoConfig,
+                emptyMap()
+            )
 
             // Fill package dependencies
             run {
@@ -636,7 +674,8 @@ private fun PackageImpl.addDependencies(workspaceData: CargoWorkspaceData, packa
             dep.depKinds,
             rawDeps.any { it.optional },
             rawDeps.any { it.uses_default_features },
-            rawDeps.flatMap { it.features }.toSet()
+            rawDeps.flatMap { it.features }.toSet(),
+            rawDeps.firstOrNull()?.rename ?: dependencyPackage.name
         )
     }
 }
@@ -666,13 +705,20 @@ private class DependencyImpl(
     override val depKinds: List<CargoWorkspace.DepKindInfo>,
     val isOptional: Boolean = false,
     val areDefaultFeaturesEnabled: Boolean = true,
-    override val requiredFeatures: Set<String> = emptySet()
+    override val requiredFeatures: Set<String> = emptySet(),
+    override val cargoFeatureDependencyPackageName: String = if (name == pkg.libTarget?.normName) pkg.name else name
 ) : CargoWorkspace.Dependency {
-    override val cargoFeatureDependencyPackageName: String
-        get() = if (name == pkg.libTarget?.normName) pkg.name else name
 
     fun withPackage(newPkg: PackageImpl): DependencyImpl =
-        DependencyImpl(newPkg, name, depKinds, isOptional, areDefaultFeaturesEnabled, requiredFeatures)
+        DependencyImpl(
+            newPkg,
+            name,
+            depKinds,
+            isOptional,
+            areDefaultFeaturesEnabled,
+            requiredFeatures,
+            cargoFeatureDependencyPackageName
+        )
 
     override fun toString(): String = name
 }

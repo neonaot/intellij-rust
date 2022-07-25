@@ -68,7 +68,11 @@ open class Graph<N, E>(
     fun forEachEdge(f: (Edge<N, E>) -> Unit) =
         edges.forEach { f(it) }
 
-    fun depthFirstTraversal(startNode: Node<N, E>, direction: Direction = Direction.OUTGOING): Sequence<Node<N, E>> {
+    fun depthFirstTraversal(
+        startNode: Node<N, E>,
+        direction: Direction = Direction.OUTGOING,
+        edgeFilter: (Edge<N, E>) -> Boolean = { true }
+    ): Sequence<Node<N, E>> {
         val visited = mutableSetOf(startNode)
         val stack = ArrayDeque<Node<N, E>>()
         stack.push(startNode)
@@ -78,10 +82,12 @@ open class Graph<N, E>(
         return generateSequence {
             val next = stack.poll()
             if (next != null) {
-                incidentEdges(next, direction).forEach { edge ->
-                    val incident = edge.incidentNode(direction)
-                    visit(incident)
-                }
+                incidentEdges(next, direction)
+                    .filter(edgeFilter)
+                    .forEach { edge ->
+                        val incident = edge.incidentNode(direction)
+                        visit(incident)
+                    }
             }
             next
         }
@@ -121,10 +127,10 @@ interface PresentableNodeData {
 
 class PresentableGraph<N : PresentableNodeData, E> : Graph<N, E>() {
     /**
-     * Creates graph description written in the DOT language.
-     * Usage: copy the output into `cfg.dot` file and run `dot -Tpng cfg.dot -o cfg.png`
+     * Creates graph description in the DOT language format.
+     * The graph can be rendered right inside the IDE using the [DOT Language plugin](https://plugins.jetbrains.com/plugin/10312-dot-language)
+     * Also, the graph can be rendered from the file using the CLI: `dot -Tpng cfg.dot -o cfg.png`
      */
-    @Suppress("unused")
     fun createDotDescription(): String =
         buildString {
             append("digraph {\n")

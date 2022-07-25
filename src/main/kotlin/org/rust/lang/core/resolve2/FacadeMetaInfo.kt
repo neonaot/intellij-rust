@@ -7,9 +7,13 @@ package org.rust.lang.core.resolve2
 
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
+import com.intellij.psi.PsiElement
 import com.intellij.util.containers.map2Array
+import org.rust.lang.core.psi.ext.RsElement
 import org.rust.lang.core.psi.ext.RsMod
 import org.rust.lang.core.psi.ext.RsNamedElement
+import org.rust.lang.core.psi.ext.ancestorOrSelf
+import org.rust.lang.core.resolve.DEFAULT_RECURSION_LIMIT
 import org.rust.lang.core.resolve.Namespace
 import org.rust.lang.core.resolve2.RsModInfoBase.RsModInfo
 
@@ -17,16 +21,21 @@ data class NamedItem(val name: String, val item: RsNamedElement)
 
 /** List of items added to [context] by glob import to [this] */
 fun RsMod.exportedItems(context: RsMod): List<NamedItem> {
-    val (project, defMap, modData) = getModInfo(this) as? RsModInfo ?: return emptyList()
+    val info = getModInfo(this) as? RsModInfo ?: return emptyList()
     val contextInfo = getModInfo(context) as? RsModInfo ?: return emptyList()
-    return modData
+    return info.modData
         .getVisibleItems { it.isVisibleFromMod(contextInfo.modData) }
         .flatMap { (name, perNs) ->
             perNs.allVisItems().flatMap { (visItem, namespace) ->
-                val items = visItem.toPsi(defMap, project, namespace)
+                val items = visItem.toPsi(info, namespace)
                 items.map { NamedItem(name, it) }
             }
         }
+}
+
+fun RsMod.allScopeItemNames(): Set<String> {
+    val info = getModInfo(this) as? RsModInfo ?: return emptySet()
+    return info.modData.visibleItems.keys
 }
 
 private fun PerNs.allVisItems(): Array<Pair<VisItem, Namespace>> =
@@ -41,5 +50,17 @@ private fun PerNs.allVisItems(): Array<Pair<VisItem, Namespace>> =
  */
 fun RsMod.getDirectoryContainedAllChildFiles(): VirtualFile? {
     val (_, _, modData) = getModInfo(this) as? RsModInfo ?: return null
-    return PersistentFS.getInstance().findFileById(modData.directoryContainedAllChildFiles)
+    return PersistentFS.getInstance().findFileById(modData.directoryContainedAllChildFiles ?: return null)
+}
+
+fun CrateDefMap.hasTransitiveGlobImport(source: RsMod, target: RsMod): Boolean {
+    val sourceModData = getModData(source) ?: return false
+    val targetModData = getModData(target) ?: return false
+    return globImportGraph.hasTransitiveGlobImport(sourceModData, targetModData)
+}
+
+fun getRecursionLimit(element: PsiElement): Int {
+    val mod = element.ancestorOrSelf<RsElement>()?.containingMod ?: return DEFAULT_RECURSION_LIMIT
+    val (_, defMap, _) = getModInfo(mod) as? RsModInfo ?: return DEFAULT_RECURSION_LIMIT
+    return defMap.recursionLimit
 }

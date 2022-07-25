@@ -11,13 +11,17 @@ import com.intellij.psi.util.CachedValue
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
 import com.intellij.util.SmartList
-import gnu.trove.THashMap
+import org.jetbrains.annotations.VisibleForTesting
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.RsCachedItems.CachedNamedImport
 import org.rust.lang.core.psi.ext.RsCachedItems.CachedStarImport
+import org.rust.lang.core.resolve2.getRecursionLimit
+import org.rust.lang.core.resolve2.util.SmartListMap
+import org.rust.lang.utils.evaluation.ThreeValuedLogic
 import org.rust.openapiext.testAssert
 import org.rust.stdext.optimizeList
 import org.rust.stdext.replaceTrivialMap
+import kotlin.LazyThreadSafetyMode.PUBLICATION
 
 interface RsItemsOwner : RsElement
 
@@ -59,31 +63,15 @@ private val EXPANDED_ITEMS_KEY: Key<CachedValue<RsCachedItems>> = Key.create("EX
 
 val RsItemsOwner.expandedItemsCached: RsCachedItems
     get() = CachedValuesManager.getCachedValue(this, EXPANDED_ITEMS_KEY) {
-        val namedImports = SmartList<CachedNamedImport>()
-        val starImports = SmartList<CachedStarImport>()
+        val imports = SmartList<RsUseItem>()
         val macros = SmartList<RsMacro>()
-        val namedCfgEnabled: MutableMap<String, SmartList<RsItemElement>> = THashMap()
-        val namedCfgDisabled: MutableMap<String, SmartList<RsItemElement>> = THashMap()
+        val namedCfgEnabled: SmartListMap<String, RsItemElement> = SmartListMap()
+        val namedCfgDisabled: SmartListMap<String, RsItemElement> = SmartListMap()
         processExpandedItemsInternal { it, isEnabledByCfgSelf ->
             when {
-                // Optimization: impls are not named elements, so we don't need them for name resolution
                 it is RsImplItem -> Unit
 
-                // Optimization: prepare use items to reduce PSI tree access in hotter code
-                isEnabledByCfgSelf && it is RsUseItem -> {
-                    val isPublic = it.isPublic
-                    it.useSpeck?.forEachLeafSpeck { speck ->
-                        if (speck.isStarImport) {
-                            starImports += CachedStarImport(isPublic, speck)
-                        } else {
-                            testAssert { speck.useGroup == null }
-                            val path = speck.path ?: return@forEachLeafSpeck
-                            val nameInScope = speck.nameInScope ?: return@forEachLeafSpeck
-                            val isAtom = speck.alias == null && path.isAtom
-                            namedImports += CachedNamedImport(isPublic, path, nameInScope, isAtom)
-                        }
-                    }
-                }
+                isEnabledByCfgSelf && it is RsUseItem -> imports.add(it)
 
                 isEnabledByCfgSelf && it is RsMacro -> macros.add(it)
 
@@ -92,7 +80,7 @@ val RsItemsOwner.expandedItemsCached: RsCachedItems
                     if (it is RsForeignModItem) {
                         for (item in it.stubChildrenOfType<RsItemElement>()) {
                             val name = item.name ?: continue
-                            named.getOrPut(name) { SmartList() }.add(item)
+                            named.addValue(name, item)
                         }
                     } else {
                         val name = when (it) {
@@ -100,7 +88,7 @@ val RsItemsOwner.expandedItemsCached: RsCachedItems
                             is RsFunction -> if (it.isProcMacroDef) it.procMacroName else it.name
                             else -> it.name
                         } ?: return@processExpandedItemsInternal false
-                        named.getOrPut(name) { SmartList() }.add(it)
+                        named.addValue(name, it)
                     }
                 }
             }
@@ -113,8 +101,7 @@ val RsItemsOwner.expandedItemsCached: RsCachedItems
         }
         CachedValueProvider.Result.create(
             RsCachedItems(
-                namedImports.optimizeList(),
-                starImports.optimizeList(),
+                lazy(PUBLICATION) { lowerImports(imports) },
                 macros.optimizeList(),
                 namedCfgEnabled.replaceTrivialMap(),
                 namedCfgDisabled.replaceTrivialMap()
@@ -123,18 +110,43 @@ val RsItemsOwner.expandedItemsCached: RsCachedItems
         )
     }
 
+private fun lowerImports(imports: List<RsUseItem>): NamedAndStarImports {
+    val namedImports = SmartList<CachedNamedImport>()
+    val starImports = SmartList<CachedStarImport>()
+    for (use in imports) {
+        val isPublic = use.isPublic
+        use.useSpeck?.forEachLeafSpeck { speck ->
+            if (speck.isStarImport) {
+                starImports += CachedStarImport(isPublic, speck)
+            } else {
+                testAssert { speck.useGroup == null }
+                val path = speck.path ?: return@forEachLeafSpeck
+                val nameInScope = speck.nameInScope ?: return@forEachLeafSpeck
+                val isAtom = speck.alias == null && path.isAtom
+                namedImports += CachedNamedImport(isPublic, path, nameInScope, isAtom)
+            }
+        }
+    }
+    return NamedAndStarImports(
+        namedImports.optimizeList(),
+        starImports.optimizeList(),
+    )
+}
+
 /**
  * Used for optimization purposes, to reduce access to a cache and PSI tree in one very hot
  * place - [org.rust.lang.core.resolve.processItemDeclarations]
  */
 class RsCachedItems(
-    val namedImports: List<CachedNamedImport>,
-    val starImports: List<CachedStarImport>,
+    private val imports: Lazy<NamedAndStarImports>,
     /** [RsMacro2] are stored in [named] */
     val legacyMacros: List<RsMacro>,
     val named: Map<String, List<RsItemElement>>,
     val namedCfgDisabled: Map<String, List<RsItemElement>>,
 ) {
+    val namedImports: List<CachedNamedImport> get() = imports.value.namedImports
+    val starImports: List<CachedStarImport> get() = imports.value.starImports
+
     data class CachedNamedImport(
         val isPublic: Boolean,
         val path: RsPath,
@@ -145,23 +157,75 @@ class RsCachedItems(
     data class CachedStarImport(val isPublic: Boolean, val speck: RsUseSpeck)
 }
 
-private fun RsItemsOwner.processExpandedItemsInternal(processor: (RsElement, Boolean) -> Boolean): Boolean {
-    return itemsAndMacros.any { it.processItem(processor) }
+class NamedAndStarImports(
+    val namedImports: List<CachedNamedImport>,
+    val starImports: List<CachedStarImport>,
+)
+
+@VisibleForTesting
+fun RsItemsOwner.processExpandedItemsInternal(
+    withMacroCalls: Boolean = false,
+    processor: (RsElement, Boolean) -> Boolean
+): Boolean {
+    val recursionLimit = getRecursionLimit(this)
+    return itemsAndMacros.any { it.processItem(withMacroCalls, recursionLimit, processor) }
 }
 
-private fun RsElement.processItem(processor: (RsElement, Boolean) -> Boolean): Boolean {
-    val isEnabledByCfgSelf = this !is RsDocAndAttributeOwner || this.existsAfterExpansionSelf
+private fun RsElement.processItem(
+    withMacroCalls: Boolean,
+    recursionLimit: Int,
+    processor: (RsElement, Boolean) -> Boolean
+): Boolean {
+    val existsAfterExpansionSelf = this !is RsDocAndAttributeOwner || evaluateCfg() != ThreeValuedLogic.False
 
-    return when (this) {
+    val derives: Sequence<RsMetaItem>? = if (this is RsAttrProcMacroOwner) {
+        when (val attr = procMacroAttributeWithDerives) {
+            is ProcMacroAttribute.Attr -> {
+                if (withMacroCalls) {
+                    if (processor(attr.attr, existsAfterExpansionSelf)) return true
+                }
+                if (!existsAfterExpansionSelf) return false
+                return attr.attr.expansion?.elements.orEmpty().any {
+                    it.processItem(withMacroCalls, recursionLimit, processor)
+                }
+            }
+            is ProcMacroAttribute.Derive -> attr.derives
+            ProcMacroAttribute.None -> null
+        }
+    } else {
+        null
+    }
+
+    when (this) {
         is RsMacroCall -> {
-            if (!isEnabledByCfgSelf) return false
-            processExpansionRecursively {
-                it is RsDocAndAttributeOwner && processor(it, it.existsAfterExpansionSelf)
+            if (withMacroCalls) {
+                if (processor(this, existsAfterExpansionSelf)) return true
+            }
+            if (existsAfterExpansionSelf) {
+                processExpansionRecursively(recursionLimit) {
+                    it.processItem(withMacroCalls, recursionLimit, processor)
+                }
             }
         }
-        is RsItemElement, is RsMacro -> processor(this, isEnabledByCfgSelf)
-        else -> false
+        is RsItemElement, is RsMacro -> {
+            if (processor(this, existsAfterExpansionSelf)) return true
+        }
     }
+
+    // Processing derives *after* `this` item itself
+    if (existsAfterExpansionSelf && derives != null) {
+        for (derive in derives) {
+            if (withMacroCalls) {
+                if (processor(derive, existsAfterExpansionSelf)) return true
+            }
+            val result = derive.expansion?.elements.orEmpty().any {
+                it.processItem(withMacroCalls, recursionLimit, processor)
+            }
+            if (result) return true
+        }
+    }
+
+    return false
 }
 
 private val RsPath.isAtom: Boolean

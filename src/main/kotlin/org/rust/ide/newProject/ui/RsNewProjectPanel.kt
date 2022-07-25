@@ -13,7 +13,6 @@ import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.MessageType
-import com.intellij.openapi.ui.popup.util.PopupUtil
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.ui.ColoredListCellRenderer
@@ -21,7 +20,9 @@ import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.Link
-import com.intellij.ui.layout.LayoutBuilder
+import com.intellij.ui.dsl.builder.Panel
+import com.intellij.ui.dsl.builder.TopGap
+import com.intellij.ui.dsl.gridLayout.VerticalAlign
 import com.intellij.util.ui.JBUI
 import org.rust.cargo.project.settings.ui.RustProjectSettingsPanel
 import org.rust.cargo.toolchain.tools.Cargo
@@ -31,7 +32,10 @@ import org.rust.ide.newProject.RsCustomTemplate
 import org.rust.ide.newProject.RsGenericTemplate
 import org.rust.ide.newProject.RsProjectTemplate
 import org.rust.ide.newProject.state.RsUserTemplatesState
+import org.rust.ide.notifications.showBalloon
 import org.rust.openapiext.UiDebouncer
+import org.rust.openapiext.fullWidthCell
+import org.rust.stdext.unwrapOrThrow
 import javax.swing.DefaultListModel
 import javax.swing.JList
 import javax.swing.ListSelectionModel
@@ -55,7 +59,7 @@ class RsNewProjectPanel(
     )
 
     private val userTemplates: List<RsCustomTemplate>
-        get() = RsUserTemplatesState.instance.templates.map {
+        get() = RsUserTemplatesState.getInstance().templates.map {
             RsCustomTemplate(it.name, it.url)
         }
 
@@ -98,7 +102,7 @@ class RsNewProjectPanel(
         }
         .setRemoveAction {
             val customTemplate = selectedTemplate as? RsCustomTemplate ?: return@setRemoveAction
-            RsUserTemplatesState.instance.templates
+            RsUserTemplatesState.getInstance().templates
                 .removeIf { it.name == customTemplate.name }
             updateTemplatesList()
         }
@@ -111,17 +115,11 @@ class RsNewProjectPanel(
         val cargo = cargo ?: return@Link
 
         object : Task.Modal(null, "Installing cargo-generate", true) {
-            var exitCode = 0
+            var exitCode: Int = Int.MIN_VALUE
 
-            override fun onSuccess() {
+            override fun onFinished() {
                 if (exitCode != 0) {
-                    PopupUtil.showBalloonForComponent(
-                        templateList,
-                        "Failed to install cargo-generate",
-                        MessageType.ERROR,
-                        true,
-                        this@RsNewProjectPanel
-                    )
+                    templateList.showBalloon("Failed to install cargo-generate", MessageType.ERROR, this@RsNewProjectPanel)
                 }
 
                 update()
@@ -138,7 +136,7 @@ class RsNewProjectPanel(
                     override fun processTerminated(event: ProcessEvent) {
                         exitCode = event.exitCode
                     }
-                })
+                }).unwrapOrThrow()
             }
         }.queue()
     }.apply { isVisible = false }
@@ -147,14 +145,19 @@ class RsNewProjectPanel(
 
     val data: ConfigurationData get() = ConfigurationData(rustProjectSettings.data, selectedTemplate)
 
-    fun attachTo(layout: LayoutBuilder) = with(layout) {
+    fun attachTo(panel: Panel) = with(panel) {
         rustProjectSettings.attachTo(this)
 
         if (showProjectTypeSelection) {
-            titledRow("Project Template") {
-                subRowIndent = 0
-                row { templateToolbar.createPanel()(growX) }
-                row { downloadCargoGenerateLink() }
+            separator("Project Template")
+                .topGap(TopGap.MEDIUM)
+            row {
+                resizableRow()
+                fullWidthCell(templateToolbar.createPanel())
+                    .verticalAlign(VerticalAlign.FILL)
+            }
+            row {
+                cell(downloadCargoGenerateLink)
             }
         }
 

@@ -12,6 +12,8 @@ import com.intellij.execution.ui.RunContentDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.NlsContexts.Button
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugProcessStarter
@@ -74,6 +76,7 @@ object RsDebugRunnerUtils {
             RsDebuggerToolchainService.LLDBStatus.Unavailable -> return false
             RsDebuggerToolchainService.LLDBStatus.NeedToDownload -> "Debugger is not loaded yet" to "Download"
             RsDebuggerToolchainService.LLDBStatus.NeedToUpdate -> "Debugger is outdated" to "Update"
+            RsDebuggerToolchainService.LLDBStatus.Bundled,
             is RsDebuggerToolchainService.LLDBStatus.Binaries -> return true
         }
 
@@ -93,7 +96,11 @@ object RsDebugRunnerUtils {
         return false
     }
 
-    private fun showDialog(project: Project, message: String, action: String): Int {
+    private fun showDialog(
+        project: Project,
+        @Suppress("UnstableApiUsage") @DialogMessage message: String,
+        @Suppress("UnstableApiUsage") @Button action: String
+    ): Int {
         return Messages.showDialog(
             project,
             message,

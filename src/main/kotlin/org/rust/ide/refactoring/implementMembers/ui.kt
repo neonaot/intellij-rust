@@ -10,7 +10,6 @@ import com.intellij.codeInsight.generation.MemberChooserObject
 import com.intellij.codeInsight.generation.MemberChooserObjectBase
 import com.intellij.ide.util.MemberChooser
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.ui.SimpleColoredComponent
 import org.jetbrains.annotations.TestOnly
 import org.rust.ide.presentation.presentationInfo
@@ -19,14 +18,14 @@ import org.rust.lang.core.psi.RsFunction
 import org.rust.lang.core.psi.RsTypeAlias
 import org.rust.lang.core.psi.ext.RsAbstractable
 import org.rust.lang.core.psi.ext.TraitImplementationInfo
+import org.rust.openapiext.isUnitTestMode
 import javax.swing.JTree
 
 
 class RsTraitMemberChooserMember(val base: MemberChooserObjectBase, val member: RsAbstractable) : ClassMember {
     private val text: String = when (member) {
-        is RsFunction ->
+        is RsFunction, is RsTypeAlias ->
             member.presentationInfo?.projectStructureItemText ?: ""
-        is RsTypeAlias -> "${member.name}"
         is RsConstant -> "${member.name}: ${member.typeReference?.text}"
         else -> error("Unknown trait member: $member")
     }

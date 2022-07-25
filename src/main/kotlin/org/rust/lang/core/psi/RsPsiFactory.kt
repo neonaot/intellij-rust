@@ -90,6 +90,10 @@ class RsPsiFactory(
         createFromText<RsLifetimeParameter>("fn foo<$text>(_: &$text u8) {}")?.quoteIdentifier
             ?: error("Failed to create quote identifier: `$text`")
 
+    fun createMetavarIdentifier(text: String): PsiElement =
+        createFromText<RsMetaVarIdentifier>("macro m { ($ $text) => () }")
+            ?: error("Failed to create metavar identifier: `$text`")
+
     fun createExpression(text: String): RsExpr =
         tryCreateExpression(text)
             ?: error("Failed to create expression from text: `$text`")
@@ -97,8 +101,11 @@ class RsPsiFactory(
     fun tryCreateExpression(text: CharSequence): RsExpr? =
         createFromText("fn main() { let _ = $text; }")
 
-    fun tryCreateExprStmt(text: CharSequence): RsExprStmt? =
-        createFromText("fn main() { $text; }")
+    fun tryCreateExprStmtWithSemicolon(text: CharSequence): RsExprStmt? =
+        createFromText<RsExprStmt>("fn main() { $text; }")?.takeIf { it.textLength == text.length + 1 }
+
+    fun tryCreateExprStmtWithoutSemicolon(text: CharSequence): RsExprStmt? =
+        createFromText<RsExprStmt>("fn main() { $text }")?.takeIf { it.textLength == text.length }
 
     fun createTryExpression(expr: RsExpr): RsTryExpr {
         val newElement = createExpressionOfType<RsTryExpr>("a?")
@@ -112,7 +119,7 @@ class RsPsiFactory(
         if (thenBranch is RsBlockExpr) {
             block.replace(thenBranch.block)
         } else {
-            block.expr!!.replace(thenBranch)
+            block.syntaxTailStmt!!.expr.replace(thenBranch)
         }
         return result
     }
@@ -128,8 +135,11 @@ class RsPsiFactory(
     fun createBlockExpr(body: CharSequence): RsBlockExpr =
         createExpressionOfType("{ $body }")
 
-    fun createUnsafeBlockExpr(body: String): RsBlockExpr =
-        createExpressionOfType("unsafe { $body }")
+    fun createUnsafeBlockExprOrStmt(body: PsiElement): RsElement = when (body) {
+        is RsExpr -> createExpressionOfType<RsBlockExpr>("unsafe { ${body.text} }")
+        is RsStmt -> createFromText<RsExprStmt>("fn f() { unsafe { ${body.text} } }")!!
+        else -> error("Unsupported element type: $body")
+    }
 
     fun createRetExpr(expr: String): RsRetExpr =
         createExpressionOfType("return $expr")
@@ -163,6 +173,9 @@ class RsPsiFactory(
         if (value != null) structLiteralField.expr?.replace(value)
         return structLiteralField
     }
+
+    fun createStructNamedField(text: String): RsNamedFieldDecl =
+        createFromText("struct S { $text }") ?: error("Failed to create block fields")
 
     data class BlockField(val name: String, val type: Ty, val addPub: Boolean)
 
@@ -222,7 +235,7 @@ class RsPsiFactory(
         tryCreateModDeclItem(modName) ?: error("Failed to create mod decl with name: `$modName`")
 
     fun tryCreateModDeclItem(modName: String): RsModDeclItem? =
-        createFromText("mod $modName;")
+        createFromText("mod ${modName.escapeIdentifierIfNeeded()};")
 
     fun createUseItem(text: String, visibility: String = "", alias: String? = null): RsUseItem {
         val aliasText = if (!alias.isNullOrEmpty()) " as $alias" else ""
@@ -256,6 +269,8 @@ class RsPsiFactory(
 
     fun tryCreateImplItem(text: String): RsImplItem? = createFromText(text)
 
+    fun tryCreateTraitItem(text: String): RsTraitItem? = createFromText(text)
+
     fun createInherentImplItem(
         name: String,
         typeParameterList: RsTypeParameterList? = null,
@@ -276,14 +291,16 @@ class RsPsiFactory(
     ): RsImplItem {
         val whereText = whereClause?.text ?: ""
         val typeParameterListText = typeParameterList?.text ?: ""
-        val typeArgumentListText = if (typeParameterList == null) {
-            ""
-        } else {
-            val parameterNames = typeParameterList.lifetimeParameterList.map { it.quoteIdentifier.text } +
-                typeParameterList.typeParameterList.map { it.name } +
-                typeParameterList.constParameterList.map { it.name }
-            parameterNames.joinToString(", ", "<", ">")
-        }
+        val typeArgumentListText = typeParameterList
+            ?.getGenericParameters()
+            ?.mapNotNull {
+                if (it is RsLifetimeParameter) {
+                    it.quoteIdentifier.text
+                } else {
+                    it.name
+                }
+            }?.joinToString(", ", "<", ">")
+            .orEmpty()
 
         return createFromText("impl $typeParameterListText $text $typeArgumentListText $whereText {  }")
             ?: error("Failed to create an trait impl with text: `$text`")
@@ -335,6 +352,13 @@ class RsPsiFactory(
         return createFromText("type T = a$text") ?: error("Failed to create type argument from text: `$text`")
     }
 
+    fun createTypeParamBounds(bounds: String): RsTypeParamBounds =
+        createFromText<RsTraitItem>("trait T : $bounds {}")?.childOfType()
+            ?: error("Failed to create type bounds from text: `$bounds`")
+
+    fun createPolybound(bound: String): RsPolybound =
+        createTypeParamBounds(bound).polyboundList.single()
+
     fun createOuterAttr(text: String): RsOuterAttr =
         createFromText("#[$text] struct Dummy;")
             ?: error("Failed to create an outer attribute from text: `$text`")
@@ -364,9 +388,13 @@ class RsPsiFactory(
         createFromText("pub(crate) fn f() {}")
             ?: error("Failed to create `pub(crate)` element")
 
+    // BACKCOMPAT: 2022.1
+    @Suppress("DEPRECATION", "UnstableApiUsage")
     fun createBlockComment(text: String): PsiComment =
         PsiParserFacade.SERVICE.getInstance(project).createBlockCommentFromText(RsLanguage, text)
 
+    // BACKCOMPAT: 2022.1
+    @Suppress("DEPRECATION", "UnstableApiUsage")
     fun createLineComment(text: String): PsiComment =
         PsiParserFacade.SERVICE.getInstance(project).createLineCommentFromText(RsFileType, text)
 
@@ -382,12 +410,17 @@ class RsPsiFactory(
     fun createEq(): PsiElement =
         createFromText<RsConstant>("const C: () = ();")!!.eq!!
 
+    fun createPlus(): PsiElement =
+        (createFromText<RsConstant>("const C = 1 + 1;")!!.expr as RsBinaryExpr).binaryOp.plus!!
+
     fun createIn(): PsiElement =
         createFromText<RsConstant>("pub(in self) const C: () = ();")?.vis?.visRestriction?.`in`
             ?: error("Failed to create `in` element")
 
     fun createNewline(): PsiElement = createWhitespace("\n")
 
+    // BACKCOMPAT: 2022.1
+    @Suppress("DEPRECATION", "UnstableApiUsage")
     fun createWhitespace(ws: String): PsiElement =
         PsiParserFacade.SERVICE.getInstance(project).createWhiteSpaceFromText(ws)
 

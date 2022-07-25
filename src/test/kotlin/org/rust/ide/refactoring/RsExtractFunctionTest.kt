@@ -6,14 +6,11 @@
 package org.rust.ide.refactoring
 
 import org.intellij.lang.annotations.Language
-import org.rust.MockEdition
-import org.rust.ProjectDescriptor
-import org.rust.RsTestBase
-import org.rust.WithStdlibRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.*
 import org.rust.ide.refactoring.extractFunction.ExtractFunctionUi
 import org.rust.ide.refactoring.extractFunction.RsExtractFunctionConfig
 import org.rust.ide.refactoring.extractFunction.withMockExtractFunctionUi
+import org.rust.lang.core.macros.MacroExpansionScope
 
 class RsExtractFunctionTest : RsTestBase() {
     fun `test extract a function without parameters and a return value`() = doTest("""
@@ -292,7 +289,7 @@ class RsExtractFunctionTest : RsTestBase() {
         struct S;
         impl S {
             fn foo() {
-                S::bar();
+                Self::bar();
             }
 
             fn bar() {
@@ -313,7 +310,7 @@ class RsExtractFunctionTest : RsTestBase() {
         struct S<T>(T);
         impl<T> S<T> {
             fn foo() {
-                <S<T>>::bar();
+                Self::bar();
             }
 
             fn bar() {
@@ -464,7 +461,7 @@ class RsExtractFunctionTest : RsTestBase() {
         impl S {
             fn foo(self) {
                 let test = 10i32;
-                S::bar(test);
+                Self::bar(test);
             }
 
             fn bar(test: i32) {
@@ -486,7 +483,7 @@ class RsExtractFunctionTest : RsTestBase() {
         struct S;
         impl S {
             fn foo() {
-                S::bar();
+                Self::bar();
             }
 
             pub fn bar() {
@@ -518,7 +515,7 @@ class RsExtractFunctionTest : RsTestBase() {
 
         impl Bar for S {
             fn foo() {
-                S::bar();
+                Self::bar();
             }
         }
 
@@ -528,7 +525,160 @@ class RsExtractFunctionTest : RsTestBase() {
                 println!("test2");
             }
         }
-""",  "bar")
+    """,  "bar")
+
+    fun `test extract a function in a impl trait (choose existing impl)`() = doTest("""
+        struct S;
+
+        trait Bar {
+            fn foo();
+        }
+
+        impl Bar for S {
+            fn foo() {
+                <selection>println!("test");
+                println!("test2");</selection>
+            }
+        }
+
+        impl S {}
+    """, """
+        struct S;
+
+        trait Bar {
+            fn foo();
+        }
+
+        impl Bar for S {
+            fn foo() {
+                Self::bar();
+            }
+        }
+
+        impl S {
+            fn bar() {
+                println!("test");
+                println!("test2");
+            }
+        }
+    """,  "bar")
+
+    fun `test extract a function in a impl trait (choose existing impl with same generic parameters)`() = doTest("""
+        struct S1;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                <selection>self.foo();</selection>
+            }
+        }
+
+        impl Foo<S1> {}
+    """, """
+        struct S1;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                self.bar();
+            }
+        }
+
+        impl Foo<S1> {
+            fn bar(&self) {
+                self.foo();
+            }
+        }
+    """,  "bar")
+
+    fun `test extract a function in a impl trait (don't choose existing impl with different generic parameters)`() = doTest("""
+        struct S1;
+        struct S2;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                <selection>self.foo();</selection>
+            }
+        }
+
+        impl Foo<S2> {}
+    """, """
+        struct S1;
+        struct S2;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                self.bar();
+            }
+        }
+
+        impl Foo<S1> {
+            fn bar(&self) {
+                self.foo();
+            }
+        }
+
+        impl Foo<S2> {}
+    """, "bar")
+
+    @MockAdditionalCfgOptions("intellij_rust")
+    fun `test extract a function in a impl trait (don't choose existing cfg-disabled impl)`() = doTest("""
+        struct S1;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                <selection>self.foo();</selection>
+            }
+        }
+
+        #[cfg(not(intellij_rust))]
+        impl Foo<S1> {}
+    """, """
+        struct S1;
+        struct Foo<T> { t: T }
+
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl Trait for Foo<S1> {
+            fn foo(&self) {
+                self.bar();
+            }
+        }
+
+        impl Foo<S1> {
+            fn bar(&self) {
+                self.foo();
+            }
+        }
+
+        #[cfg(not(intellij_rust))]
+        impl Foo<S1> {}
+    """, "bar")
 
     fun `test extract a function in a trait`() = doTest("""
         trait Foo {
@@ -674,6 +824,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "bar")
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test extract a function with passing primitive`() = doTest("""
         fn foo() {
             let i = 1;
@@ -918,7 +1069,54 @@ class RsExtractFunctionTest : RsTestBase() {
         }
     """, "bar", noSelected = listOf("a"))
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
+    fun `test extract expr with trailing semicolon`() = doTest("""
+        fn main() {
+            let a = <selection>42;</selection>
+        }
+    """, """
+        fn main() {
+            let a = bar();
+        }
+
+        fn bar() -> i32 {
+            42
+        }
+    """, "bar")
+
+    fun `test extract expr with trailing semicolon and whitespace`() = doTest("""
+        fn main() {
+            let a = <selection>42; </selection> //
+        }
+    """, """
+        fn main() {
+            let a = bar();  //
+        }
+
+        fn bar() -> i32 {
+            42
+        }
+    """, "bar")
+
+    fun `test extract expr with trailing comma`() = doTest("""
+        fn main() {
+            let s = S {
+                a: <selection>42,</selection>
+                b: 0,
+            };
+        }
+    """, """
+        fn main() {
+            let s = S {
+                a: bar(),
+                b: 0,
+            };
+        }
+
+        fn bar() -> i32 {
+            42
+        }
+    """, "bar")
+
     fun `test extract async function with await`() = doTest("""
         #[lang = "core::future::future::Future"]
         trait Future { type Output; }
@@ -939,7 +1137,6 @@ class RsExtractFunctionTest : RsTestBase() {
         }
     """, "bar")
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test extract async function with nested await`() = doTest("""
         #[lang = "core::future::future::Future"]
         trait Future { type Output; }
@@ -974,7 +1171,6 @@ class RsExtractFunctionTest : RsTestBase() {
         }
     """, "bar")
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test extract sync function with await inside block`() = doTest("""
         async fn foo() {
             <selection>async { async { () }.await };</selection>
@@ -989,7 +1185,6 @@ class RsExtractFunctionTest : RsTestBase() {
         }
     """, "bar")
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test extract sync function with await inside closure`() = doTest("""
         #![feature(async_closure)]
         async fn foo() {
@@ -1133,7 +1328,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "foo")
 
     fun `test import parameter types`() = doTest("""
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub struct A;
@@ -1145,7 +1340,7 @@ class RsExtractFunctionTest : RsTestBase() {
             <selection>s;</selection>
         }
     """, """
-        use a::{foo, A};
+        use crate::a::{A, foo};
 
         mod a {
             pub struct A;
@@ -1163,7 +1358,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "bar")
 
     fun `test import return type`() = doTest("""
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub struct A;
@@ -1174,7 +1369,7 @@ class RsExtractFunctionTest : RsTestBase() {
             <selection>foo()</selection>;
         }
     """, """
-        use a::{foo, A};
+        use crate::a::{A, foo};
 
         mod a {
             pub struct A;
@@ -1191,7 +1386,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "bar")
 
     fun `test do not import default types`() = doTest("""
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub struct S;
@@ -1203,7 +1398,7 @@ class RsExtractFunctionTest : RsTestBase() {
             <selection>foo()</selection>;
         }
     """, """
-        use a::{foo, A};
+        use crate::a::{A, foo};
 
         mod a {
             pub struct S;
@@ -1221,7 +1416,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "bar")
 
     fun `test import non default types`() = doTest("""
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub struct S1;
@@ -1234,7 +1429,7 @@ class RsExtractFunctionTest : RsTestBase() {
             <selection>foo()</selection>;
         }
     """, """
-        use a::{foo, A, S2};
+        use crate::a::{A, foo, S2};
 
         mod a {
             pub struct S1;
@@ -1253,7 +1448,7 @@ class RsExtractFunctionTest : RsTestBase() {
     """, "bar")
 
     fun `test import aliased type`() = doTest("""
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub struct A;
@@ -1266,7 +1461,7 @@ class RsExtractFunctionTest : RsTestBase() {
             <selection>s</selection>
         }
     """, """
-        use a::{foo, Foo};
+        use crate::a::{foo, Foo};
 
         mod a {
             pub struct A;
@@ -1465,6 +1660,150 @@ class RsExtractFunctionTest : RsTestBase() {
         fn bar(a: S) -> S {
             let b = a;
             b
+        }
+    """, "bar")
+
+    fun `test extract a function in a generic impl trait with multiple type parameters`() = doTest("""
+        trait Trait {
+            fn fn_bar() {}
+        }
+
+        trait Trait2 {
+            fn fn_bar() {}
+        }
+
+        enum Result<T, E> {
+            Ok(T),
+            Err(E),
+        }
+
+        impl<T, E> Trait for Result<T, E> where (T, E): Trait2 {
+            fn fn_bar() {
+                <selection>println!("hello");</selection>
+            }
+        }
+    """, """
+        trait Trait {
+            fn fn_bar() {}
+        }
+
+        trait Trait2 {
+            fn fn_bar() {}
+        }
+
+        enum Result<T, E> {
+            Ok(T),
+            Err(E),
+        }
+
+        impl<T, E> Trait for Result<T, E> where (T, E): Trait2 {
+            fn fn_bar() {
+                Self::bar();
+            }
+        }
+
+        impl<T, E> Result<T, E> where (T, E): Trait2 {
+            fn bar() {
+                println!("hello");
+            }
+        }
+    """, "bar")
+
+    fun `test extract a function in a generic impl trait with where`() = doTest("""
+        trait Trait2 {}
+
+        struct Foo<T> where T: Trait2 { t: T }
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl<T> Trait for Foo<T> where T: Trait2 {
+            fn foo(&self) {
+                <selection>println!("test");</selection>
+            }
+        }
+    """, """
+        trait Trait2 {}
+
+        struct Foo<T> where T: Trait2 { t: T }
+        trait Trait {
+            fn foo(&self);
+        }
+
+        impl<T> Trait for Foo<T> where T: Trait2 {
+            fn foo(&self) {
+                Self::bar();
+            }
+        }
+
+        impl<T> Foo<T> where T: Trait2 {
+            fn bar() {
+                println!("test");
+            }
+        }
+    """, "bar")
+
+    fun `test extract a function in impl trait with lifetimes`() = doTest("""
+        struct Foo<'a, T>(&'a T);
+        trait Trait {
+            fn foo(&self);
+        }
+        trait Trait2<'a> {}
+
+        impl<'a, T> Trait for Foo<'a, T> where T: Trait2<'a> {
+            fn foo(&self) {
+                <selection>println!("test");</selection>
+            }
+        }
+    """, """
+        struct Foo<'a, T>(&'a T);
+        trait Trait {
+            fn foo(&self);
+        }
+        trait Trait2<'a> {}
+
+        impl<'a, T> Trait for Foo<'a, T> where T: Trait2<'a> {
+            fn foo(&self) {
+                Self::bar();
+            }
+        }
+
+        impl<'a, T> Foo<'a, T> where T: Trait2<'a> {
+            fn bar() {
+                println!("test");
+            }
+        }
+    """, "bar")
+
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
+    fun `test extract println! argument expression`() = doTest("""
+        fn main() {
+            println!("{}", <selection>1 + 2</selection>);
+        }
+    """, """
+        fn main() {
+            println!("{}", bar());
+        }
+
+        fn bar() -> i32 {
+            1 + 2
+        }
+    """, "bar")
+
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
+    fun `test extract vec! argument expression`() = doTest("""
+        fn main() {
+            vec![<selection>1 + 2</selection>];
+        }
+    """, """
+        fn main() {
+            vec![bar()];
+        }
+
+        fn bar() -> i32 {
+            1 + 2
         }
     """, "bar")
 

@@ -31,6 +31,7 @@ import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.settings.toolchain
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.runconfig.command.workingDirectory
+import org.rust.cargo.toolchain.impl.Applicability
 import org.rust.cargo.toolchain.tools.CargoCheckArgs
 import org.rust.ide.annotator.RsExternalLinterResult
 import org.rust.ide.annotator.RsExternalLinterUtils
@@ -109,12 +110,11 @@ class RsExternalLinterInspection : GlobalSimpleInspectionTool() {
         }
     }
 
-    override fun getDisplayName(): String = DISPLAY_NAME
+    override fun getDisplayName(): String = "External Linter"
 
     override fun getShortName(): String = SHORT_NAME
 
     companion object {
-        const val DISPLAY_NAME: String = "External Linter"
         const val SHORT_NAME: String = "RsExternalLinter"
 
         private val ANALYZED_FILES: Key<MutableSet<RsFile>> = Key.create("ANALYZED_FILES")
@@ -200,11 +200,11 @@ class RsExternalLinterInspection : GlobalSimpleInspectionTool() {
         ): List<ProblemDescriptor> = buildList {
             for (file in analyzedFiles) {
                 if (!file.isValid) continue
-                @Suppress("UnstableApiUsage")
+                @Suppress("UnstableApiUsage", "DEPRECATION")
                 val annotationHolder = AnnotationHolderImpl(AnnotationSession(file))
                 @Suppress("UnstableApiUsage")
                 annotationHolder.runAnnotatorWithContext(file) { _, holder ->
-                    holder.createAnnotationsForFile(file, annotationResult)
+                    holder.createAnnotationsForFile(file, annotationResult, Applicability.MACHINE_APPLICABLE)
                 }
                 addAll(convertToProblemDescriptors(annotationHolder, file))
             }

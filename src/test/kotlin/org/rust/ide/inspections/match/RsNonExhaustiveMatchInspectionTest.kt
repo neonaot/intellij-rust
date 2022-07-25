@@ -443,8 +443,8 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
     """)
 
     fun `test import unresolved type`() = checkFixByText("Add remaining patterns", """
-        use a::foo;
-        use a::E::A;
+        use crate::a::E::A;
+        use crate::a::foo;
 
         mod a {
             pub enum E { A, B }
@@ -457,8 +457,8 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
             };
         }
     """, """
-        use a::{foo, E};
-        use a::E::A;
+        use crate::a::E::A;
+        use crate::a::{E, foo};
 
         mod a {
             pub enum E { A, B }
@@ -728,6 +728,27 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
         }
     """)
 
+    @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
+    fun `test do not offer add remaining arms fix for non-exhaustive enum match in different crate`() = checkFixIsUnavailableByFileTree("Add remaining", """
+        //- dep-lib/lib.rs
+        #[non_exhaustive]
+        pub enum Error {
+            Variant
+        }
+
+        //- main.rs
+        extern crate dep_lib_target;
+        use dep_lib_target::Error;
+
+        fn main() {
+            let error = Error::Variant;
+
+            <error descr="Match must be exhaustive [E0004]">match/*caret*/</error> error {
+                Error::Variant => println!("Variant")
+            }
+        }
+    """)
+
     fun `test empty match simple enum variants`() = checkFixByText("Add remaining patterns", """
         enum FooBar { Foo, Bar }
 
@@ -887,7 +908,7 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
     """)
 
     fun `test empty match import unresolved type`() = checkFixByText("Add remaining patterns", """
-        use a::foo;
+        use crate::a::foo;
 
         mod a {
             pub enum FooBar { Foo, Bar }
@@ -898,7 +919,7 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
             <error descr="Match must be exhaustive [E0004]">match/*caret*/</error> foo() {};
         }
     """, """
-        use a::{foo, FooBar};
+        use crate::a::{foo, FooBar};
 
         mod a {
             pub enum FooBar { Foo, Bar }
@@ -910,6 +931,44 @@ class RsNonExhaustiveMatchInspectionTest : RsInspectionsTestBase(RsNonExhaustive
                 FooBar::Foo => {}
                 FooBar::Bar => {}
             };
+        }
+    """)
+
+    fun `test no match body with enum expr`() = checkFixByText("Add remaining patterns", """
+        enum E { A, B, C }
+
+        fn test(e: E) {
+            <error descr="Match must be exhaustive [E0004]">match/*caret*/</error> e<EOLError descr="'!', '(', '::', <operator>, '[' or '{' expected, got '}'"></EOLError>
+        }
+    """, """
+        enum E { A, B, C }
+
+        fn test(e: E) {
+            match/*caret*/ e {
+                E::A => {}
+                E::B => {}
+                E::C => {}
+            }
+        }
+    """)
+
+    fun `test no match body with i32 expr`() = checkFixByText("Add remaining patterns", """
+        fn test(i: i32) {
+            <error descr="Match must be exhaustive [E0004]">match/*caret*/</error> i<EOLError descr="'!', '(', '::', <operator>, '[' or '{' expected, got '}'"></EOLError>
+        }
+    """, """
+        fn test(i: i32) {
+            match/*caret*/ i { _ => {} }
+        }
+    """)
+
+    fun `test no match body with {} expr`() = checkFixByText("Add remaining patterns", """
+        fn test() {
+            <error descr="Match must be exhaustive [E0004]">match/*caret*/</error> {}<EOLError descr="'(', <operator>, '[' or '{' expected, got '}'"></EOLError>
+        }
+    """, """
+        fn test() {
+            match/*caret*/ {} { _ => {} }
         }
     """)
 

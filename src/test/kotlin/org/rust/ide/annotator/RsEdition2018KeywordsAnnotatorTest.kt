@@ -5,9 +5,8 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.BatchMode
 import org.rust.MockEdition
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.ide.colors.RsColor
 
 class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018KeywordsAnnotator::class) {
@@ -17,6 +16,7 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         annotationFixture.registerSeverities(listOf(RsColor.KEYWORD.testSeverity))
     }
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test edition 2018 keywords in edition 2015`() = checkErrors("""
         fn main() {
             let async = ();
@@ -28,7 +28,6 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test edition 2018 keywords in edition 2018`() = checkErrors("""
         fn main() {
             let <error descr="`async` is reserved keyword in Edition 2018">async</error> = ();
@@ -41,7 +40,6 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
     """)
 
     // We should report an error here
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test reserved keywords in macro names in edition 2018`() = checkErrors("""
         fn main() {
             let x = async!();
@@ -50,6 +48,7 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         }
     """)
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test async in edition 2015`() = checkErrors("""
         <error descr="This feature is only available in Edition 2018">async</error> fn foo() {}
 
@@ -60,7 +59,6 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test async in edition 2018`() = checkErrors("""
         <KEYWORD>async</KEYWORD> fn foo() {}
 
@@ -71,20 +69,19 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         }
     """)
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test try in edition 2015`() = checkErrors("""
         fn main() {
             <error descr="This feature is only available in Edition 2018">try</error> { () };
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test try in edition 2018`() = checkErrors("""
         fn main() {
             <KEYWORD>try</KEYWORD> { () };
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test don't analyze macro def-call bodies, attributes and use items`() = checkErrors("""
         use dummy::async;
         use dummy::await;
@@ -114,7 +111,6 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test await postfix syntax`() = checkErrors("""
         fn main() {
             let x = f().await;
@@ -123,7 +119,6 @@ class RsEdition2018KeywordsAnnotatorTest : RsAnnotatorTestBase(RsEdition2018Keyw
     """)
 
     @BatchMode
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test no keyword highlighting in batch mode`() = checkHighlighting("""
         async fn foo() {}
         fn main() {

@@ -5,43 +5,54 @@
 
 package org.rust.lang.core.resolve2
 
+import com.intellij.concurrency.SensitiveProgressWrapper
+import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.registry.Registry
+import com.intellij.openapi.util.registry.RegistryValue
 import com.intellij.openapi.vfs.newvfs.persistent.PersistentFS
-import com.intellij.openapiext.isUnitTestMode
+import gnu.trove.THashMap
 import org.rust.cargo.project.workspace.CargoWorkspaceData
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.*
 import org.rust.lang.core.macros.decl.MACRO_DOLLAR_CRATE_IDENTIFIER
-import org.rust.lang.core.psi.RsMacroBody
-import org.rust.lang.core.psi.RsProcMacroKind
-import org.rust.lang.core.psi.RsPsiFactory
+import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.body
-import org.rust.lang.core.psi.rustFile
-import org.rust.lang.core.resolve.DEFAULT_RECURSION_LIMIT
+import org.rust.lang.core.resolve.Namespace
 import org.rust.lang.core.resolve2.ImportType.GLOB
 import org.rust.lang.core.resolve2.ImportType.NAMED
 import org.rust.lang.core.resolve2.PartialResolvedImport.*
+import org.rust.lang.core.resolve2.util.DollarCrateMap
 import org.rust.lang.core.resolve2.util.createDollarCrateHelper
+import org.rust.lang.core.stubs.RsFileStub
 import org.rust.openapiext.*
 import org.rust.stdext.HashCode
+import org.rust.stdext.getWithRethrow
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import kotlin.math.ceil
 
 private const val CONSIDER_INDETERMINATE_IMPORTS_AS_RESOLVED: Boolean = false
+private val EXPAND_MACROS_IN_PARALLEL: RegistryValue = Registry.get("org.rust.resolve.new.engine.macros.parallel")
 
 /** Resolves all imports and expands macros (new items are added to [defMap]) using fixed point iteration algorithm */
 class DefCollector(
     private val project: Project,
     private val defMap: CrateDefMap,
     private val context: CollectorContext,
+    private val pool: ExecutorService?,
+    private val indicator: ProgressIndicator,
 ) {
-
-    private data class GlobImportInfo(val containingMod: ModData, val visibility: Visibility)
 
     /**
      * Reversed glob-imports graph, that is
      * for each module (`targetMod`) store all modules which contain glob import to `targetMod`
      */
-    private val globImports: MutableMap<ModData /* target mod */, MutableList<GlobImportInfo>> = hashMapOf()
+    private val globImports: MutableMap<
+        ModData /* target mod */,
+        MutableMap<ModData /* source mod */, Visibility>
+        > = hashMapOf()
     private val unresolvedImports: MutableList<Import> = context.imports
     private val resolvedImports: MutableList<Import> = mutableListOf()
 
@@ -51,6 +62,8 @@ class DefCollector(
     private val macroExpander = FunctionLikeMacroExpander.new(project)
     private val macroExpanderShared: MacroExpansionSharedCache = MacroExpansionSharedCache.getInstance()
 
+    private val macroMixHashToOrder: MutableMap<HashCode /* mix hash */, Int> = THashMap()
+
     private val shouldExpandMacros: Boolean =
         when (val mode = project.macroExpansionManager.macroExpansionMode) {
             MacroExpansionMode.Disabled -> false
@@ -58,16 +71,22 @@ class DefCollector(
             MacroExpansionMode.Old -> true
         }
 
+    private val recursionLimit: Int = defMap.recursionLimit
+
     fun collect() {
         do {
             // Have to call it in loop, because macro can expand to
             // two cfg-disabled mods with same name (first one will be shadowed).
             // See [RsCfgAttrResolveTest.`test import inside expanded shadowed mod 1`].
             removeInvalidImportsAndMacroCalls(defMap, context)
+            sortImports(unresolvedImports)
 
             resolveImports()
             val changed = expandMacros()
         } while (changed)
+        if (!context.isHangingMode) {
+            defMap.afterBuilt()
+        }
     }
 
     /**
@@ -78,11 +97,11 @@ class DefCollector(
     private fun resolveImports() {
         do {
             var hasChangedIndeterminateImports = false
-            val hasResolvedImports = unresolvedImports.inPlaceRemoveIf { import ->
+            val hasResolvedImports = unresolvedImports.removeIf { import ->
                 ProgressManager.checkCanceled()
                 when (val status = resolveImport(import)) {
                     is Indeterminate -> {
-                        if (import.status is Indeterminate && import.status == status) return@inPlaceRemoveIf false
+                        if (import.status is Indeterminate && import.status == status) return@removeIf false
 
                         import.status = status
                         val changed = recordResolvedImport(import)
@@ -157,7 +176,8 @@ class DefCollector(
             if (isUnitTestMode) error("Glob import from not module or enum: $import")
             return false
         }
-        val targetMod = defMap.tryCastToModData(types) ?: return false
+
+        val targetMod = defMap.tryCastToModData(types, context.hangingModData) ?: return false
         val containingMod = import.containingMod
         when {
             import.isPrelude -> {
@@ -170,11 +190,16 @@ class DefCollector(
                 val items = targetMod.getVisibleItems { it.isVisibleFromMod(containingMod) }
                 val changed = update(containingMod, items, import.visibility, GLOB)
 
+                if (!context.isHangingMode) {
+                    /** See [CrateDefMap.hasTransitiveGlobImport] */
+                    defMap.globImportGraph.recordGlobImport(containingMod, targetMod, import.visibility)
+                }
+
                 // record the glob import in case we add further items
-                val globImports = globImports.computeIfAbsent(targetMod) { mutableListOf() }
-                // TODO: If there are two glob imports, we should choose with widest visibility
-                if (globImports.none { (mod, _) -> mod == containingMod }) {
-                    globImports += GlobImportInfo(containingMod, import.visibility)
+                val globImports = globImports.computeIfAbsent(targetMod) { hashMapOf() }
+                val existingGlobImportVisibility = globImports[containingMod]
+                if (existingGlobImportVisibility?.isStrictlyMorePermissive(import.visibility) != true) {
+                    globImports[containingMod] = import.visibility
                 }
                 return changed
             }
@@ -192,10 +217,13 @@ class DefCollector(
 
         // extern crates in the crate root are special-cased to insert entries into the extern prelude
         // https://github.com/rust-lang/rust/pull/54658
-        if (import.isExternCrate && containingMod.isCrateRoot && name != "_") {
+        if (import.isExternCrate && containingMod.isCrateRoot && name != "_" && !context.isHangingMode) {
             val types = def.types.singleOrNull() ?: error("null PerNs.types for extern crate import")
             val externCrateDefMap = defMap.getDefMap(types.path.crate)
-            externCrateDefMap?.let { defMap.externPrelude[name] = it }
+            externCrateDefMap?.let {
+                defMap.externPrelude[name] = it
+                defMap.externCratesInRoot[name] = it
+            }
         }
 
         val defWithAdjustedVisible = def.mapItems {
@@ -230,9 +258,8 @@ class DefCollector(
     ): Boolean {
         check(depth <= 100) { "infinite recursion in glob imports!" }
 
-        var changed = false
-        for ((name, def) in resolutions) {
-            val changedCurrent = if (name != "_") {
+        val resolutionsNew = resolutions.filter { (name, def) ->
+            if (name != "_") {
                 val defAdjusted = def.adjust(visibility, isFromNamedImport = importType == NAMED)
                     .adjustMultiresolve()
                 pushResolutionFromImport(modData, name, defAdjusted)
@@ -240,16 +267,15 @@ class DefCollector(
                 // TODO: What if `def` is not trait?
                 pushTraitResolutionFromImport(modData, def, visibility)
             }
-
-            if (changedCurrent) changed = true
         }
+        val changed = resolutionsNew.isNotEmpty()
         if (!changed) return changed
 
         val globImports = globImports[modData] ?: return changed
         for ((globImportingMod, globImportVis) in globImports) {
             // we know all resolutions have the same `visibility`, so we just need to check that once
             if (!visibility.isVisibleFromMod(globImportingMod)) continue
-            updateRecursive(globImportingMod, resolutions, globImportVis, GLOB, depth + 1)
+            updateRecursive(globImportingMod, resolutionsNew, globImportVis, GLOB, depth + 1)
         }
         return changed
     }
@@ -268,63 +294,133 @@ class DefCollector(
         return changed
     }
 
+    private data class ExpansionInput(val call: MacroCallInfo, val def: MacroDefInfo)
+    private data class ExpansionOutput(
+        val call: MacroCallInfo,
+        val def: MacroDefInfo,
+        val expandedFile: RsFileStub?,
+        val expansion: ExpansionResultOk?,
+        val mixHash: HashCode,
+    )
+
     private fun expandMacros(): Boolean {
         if (!shouldExpandMacros) return false
-        return macroCallsToExpand.inPlaceRemoveIf { call ->
+        val macrosToExpandInParallel = mutableListOf<ExpansionInput>()
+        val changed = macroCallsToExpand.inPlaceRemoveIf { call ->
             ProgressManager.checkCanceled()
             // TODO: Actually resolve macro instead of name check
             if (call.path.last() == "include") {
                 expandIncludeMacroCall(call)
                 return@inPlaceRemoveIf true
             }
-            tryExpandMacroCall(call)
+
+            val def = defMap.resolveMacroCallToMacroDefInfo(call.containingMod, call.path, call.macroIndex)
+                ?: return@inPlaceRemoveIf false
+
+            if (call.body.kind != def.procMacroKind) return@inPlaceRemoveIf false
+            if (tryTreatAsIdentityMacro(call, def)) return@inPlaceRemoveIf true
+
+            macrosToExpandInParallel += ExpansionInput(call, def)
+            true
+        }
+        expandMacrosInParallel(macrosToExpandInParallel)
+        return changed
+    }
+
+    private fun tryTreatAsIdentityMacro(call: MacroCallInfo, def: MacroDefInfo): Boolean {
+        if (def !is ProcMacroDefInfo || !def.kind.treatAsBuiltinAttr || call.originalItem == null) return false
+        val (visItem, namespaces, procMacroKind) = call.originalItem
+
+        /** See also [ModCollector.collectSimpleItem] */
+        call.containingMod.addVisibleItem(visItem.name, PerNs.from(visItem, namespaces))
+        if (procMacroKind != null) {
+            call.containingMod.procMacros[visItem.name] = procMacroKind
+        }
+        return true
+    }
+
+    private fun expandMacrosInParallel(macros: List<ExpansionInput>) {
+        if (macros.isEmpty()) return
+        val batches = macros.splitInBatches(100)
+
+        val result = if (pool != null && EXPAND_MACROS_IN_PARALLEL.asBoolean()) {
+            val indicator = indicator.toThreadSafeProgressIndicator()
+            // Don't use `.parallelStream()` - for typical count of batches (10-20) it will run all tasks on current thread
+            val tasks = batches.map { batch ->
+                Callable {
+                    computeInReadActionWithWriteActionPriority(SensitiveProgressWrapper(indicator)) {
+                        expandMacrosInBatch(batch)
+                    }
+                }
+            }
+            pool.invokeAll(tasks).map { it.getWithRethrow() }
+        } else {
+            batches.map { expandMacrosInBatch(it) }
+        }
+        for (batch in result) {
+            batch.forEach(this::recordExpansion)
         }
     }
 
-    private fun tryExpandMacroCall(call: MacroCallInfo): Boolean {
-        val def = defMap.resolveMacroCallToMacroDefInfo(call.containingMod, call.path, call.macroIndex)
-            ?: return false
-        val defData = RsMacroDataWithHash.fromDefInfo(def).ok()
-            ?: return false
+    private fun expandMacrosInBatch(batch: List<ExpansionInput>): List<ExpansionOutput> =
+        batch.mapNotNull { (call, def) -> expandMacro(call, def) }
+
+    private fun expandMacro(call: MacroCallInfo, def: MacroDefInfo): ExpansionOutput? {
+        val defData = RsMacroDataWithHash.fromDefInfo(def).ok() ?: return null
         val callData = RsMacroCallDataWithHash(RsMacroCallData(call.body, defMap.metaData.env), call.bodyHash)
+        val mixHash = defData.mixHash(callData) ?: return null
         val (expandedFile, expansion) =
-            macroExpanderShared.createExpansionStub(project, macroExpander, defData, callData) ?: return true
+            macroExpanderShared.createExpansionStub(project, macroExpander, defData, callData) ?: (null to null)
+        return ExpansionOutput(call, def, expandedFile, expansion, mixHash)
+    }
 
-        val dollarCrateHelper = if (def is DeclMacroDefInfo) {
-            createDollarCrateHelper(call, def, expansion)
-        } else {
-            null
-        }
+    private fun recordExpansion(result: ExpansionOutput) {
+        val (call, def, expandedFile, expansion, mixHash) = result
 
-        val context = getModCollectorContextForExpandedElements(call) ?: return true
+        /**
+         * If expansion is null, we still need to record `mixHash` <-> `macroIndex` mapping,
+         * in order to propagate proper error in [MacroExpansionServiceImplInner.getReasonWhyExpansionFileNotFound].
+        */
+        recordExpansionFileName(call, mixHash)
+        if (expandedFile == null || expansion == null) return
+
+        val dollarCrateHelper = createDollarCrateHelper(call, def, expansion)
+        val context = getModCollectorContextForExpandedElements(call) ?: return
         collectExpandedElements(expandedFile, call, context, dollarCrateHelper)
-        return true
+    }
+
+    private fun recordExpansionFileName(call: MacroCallInfo, mixHash: HashCode) {
+        if (context.isHangingMode) return
+        val order = macroMixHashToOrder.merge(mixHash, 1, Int::plus)!!
+        val expansionName = "${mixHash}_${order}_$MACRO_STORAGE_VERSION.rs"
+        val lightInfo = MacroCallLightInfo(call.containingMod, call.macroIndex, call.body.kind)
+        defMap.macroCallToExpansionName[call.macroIndex] = expansionName
+        defMap.expansionNameToMacroCall[expansionName] = lightInfo
     }
 
     private fun expandIncludeMacroCall(call: MacroCallInfo) {
         val modData = call.containingMod
-        val containingFile = PersistentFS.getInstance().findFileById(modData.fileId) ?: return
-        val includePath = call.body
+        val containingFile = PersistentFS.getInstance().findFileById(modData.fileId ?: return) ?: return
+        val includePath = (call.body as? MacroCallBody.FunctionLike)?.text ?: return
         val parentDirectory = containingFile.parent
         val includingFile = parentDirectory.findFileByMaybeRelativePath(includePath)
         val includingRsFile = includingFile?.toPsiFile(project)?.rustFile
         if (includingRsFile != null) {
             val context = getModCollectorContextForExpandedElements(call) ?: return
-            collectFileAndCalculateHash(includingRsFile, call.containingMod, call.macroIndex, context)
-        } else {
+            collectScope(includingRsFile, call.containingMod, context, call.macroIndex, propagateLegacyMacros = true)
+        } else if (!context.isHangingMode) {
             val filePath = parentDirectory.pathAsPath.resolve(includePath)
             defMap.missedFiles.add(filePath)
         }
         if (includingFile != null) {
-            modData.recordChildFileInUnusualLocation(includingFile.fileId)
+            recordChildFileInUnusualLocation(modData, includingFile.fileId)
         }
     }
 
     private fun getModCollectorContextForExpandedElements(call: MacroCallInfo): ModCollectorContext? {
-        if (call.depth >= DEFAULT_RECURSION_LIMIT) return null
+        if (call.depth >= recursionLimit) return null
         return ModCollectorContext(
             defMap = defMap,
-            crateRoot = defMap.root,
             context = context,
             macroDepth = call.depth + 1,
             onAddItem = ::onAddItem
@@ -381,6 +477,8 @@ sealed class PartialResolvedImport {
 sealed class MacroDefInfo {
     abstract val crate: CratePersistentId
     abstract val path: ModPath
+
+    open val procMacroKind: RsProcMacroKind get() = RsProcMacroKind.FUNCTION_LIKE
 }
 
 class DeclMacroDefInfo(
@@ -419,25 +517,38 @@ class DeclMacro2DefInfo(
 class ProcMacroDefInfo(
     override val crate: CratePersistentId,
     override val path: ModPath,
-    val procMacroKind: RsProcMacroKind,
+    override val procMacroKind: RsProcMacroKind,
     val procMacroArtifact: CargoWorkspaceData.ProcMacroArtifact?,
+    val kind: KnownProcMacroKind,
 ) : MacroDefInfo()
 
 class MacroCallInfo(
     val containingMod: ModData,
     val macroIndex: MacroIndex,
     val path: Array<String>,
-    val body: String,
+    val body: MacroCallBody,
     val bodyHash: HashCode?,  // null for `include!` macro
     val depth: Int,
     /**
      * `srcOffset` - [CratePersistentId]
      * `dstOffset` - index of [MACRO_DOLLAR_CRATE_IDENTIFIER] in [body]
      */
-    val dollarCrateMap: RangeMap = RangeMap.EMPTY,
+    val dollarCrateMap: DollarCrateMap = DollarCrateMap.EMPTY,
+
+    /**
+     * Non-null in the case of attribute procedural macro if we can fall back that item
+     * ([org.rust.lang.core.psi.RsProcMacroPsiUtil.canFallBackAttrMacroToOriginalItem])
+     */
+    val originalItem: Triple<VisItem, Set<Namespace>, RsProcMacroKind?>? = null,
 ) {
     override fun toString(): String = "${containingMod.path}:  ${path.joinToString("::")}! { $body }"
 }
+
+data class MacroCallLightInfo(
+    val containingMod: ModData,
+    val macroIndex: MacroIndex,
+    val kind: RsProcMacroKind,
+)
 
 /**
  * "Invalid" means it belongs to [ModData] which is no longer accessible from `defMap.root` using [ModData.childModules]
@@ -452,10 +563,25 @@ private fun removeInvalidImportsAndMacroCalls(defMap: CrateDefMap, context: Coll
         }
     }
 
+    if (context.isHangingMode) return
     val allMods = hashSetOf<ModData>()
     collectChildMods(defMap.root, allMods)
     context.imports.removeIf { it.containingMod !in allMods }
     context.macroCalls.removeIf { it.containingMod !in allMods }
+}
+
+/**
+ * This is a workaround for some real-project cases. See:
+ * - [RsUseResolveTest.`test import adds same name as existing`]
+ * - https://github.com/rust-lang/cargo/blob/875e0123259b0b6299903fe4aea0a12ecde9324f/src/cargo/util/mod.rs#L23
+ */
+private fun sortImports(imports: MutableList<Import>) {
+    imports.sortWith(
+        compareBy<Import> { it.visibility === Visibility.CfgDisabled }  // cfg-enabled imports first
+            .thenBy { it.isGlob }  // named imports first
+            .thenByDescending { it.nameInScope in it.containingMod.visibleItems }
+            .thenByDescending { it.containingMod.path.segments.size }  // imports from nested modules first
+    )
 }
 
 /**
@@ -476,6 +602,13 @@ private inline fun <T> MutableList<T>.inPlaceRemoveIf(filter: (T) -> Boolean): B
         }
     }
     return removed
+}
+
+private fun <T> List<T>.splitInBatches(batchSize: Int): List<List<T>> {
+    if (size <= batchSize) return listOf(this)
+    val numberBatches = ceil(size.toDouble() / batchSize).toInt()
+    val adjustedBatchSize = ceil(size.toDouble() / numberBatches).toInt()
+    return chunked(adjustedBatchSize)
 }
 
 fun pushResolutionFromImport(modData: ModData, name: String, def: PerNs): Boolean {
@@ -550,4 +683,13 @@ private fun Array<VisItem>.importType(): ImportType {
     val isFromNamedImport = first().isFromNamedImport
     testAssert { all { it.isFromNamedImport == isFromNamedImport } }
     return if (isFromNamedImport) NAMED else GLOB
+}
+
+private fun CrateDefMap.afterBuilt() {
+    root.visitDescendants {
+        it.isShadowedByOtherFile = false
+    }
+
+    // TODO: uncomment when #[cfg_attr] will be supported
+    // testAssert { missedFiles.isEmpty() }
 }

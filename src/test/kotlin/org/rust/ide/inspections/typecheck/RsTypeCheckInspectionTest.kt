@@ -6,6 +6,7 @@
 package org.rust.ide.inspections.typecheck
 
 import org.rust.ExpandMacros
+import org.rust.MockRustcVersion
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
 import org.rust.ide.inspections.RsInspectionsTestBase
@@ -29,9 +30,10 @@ class RsTypeCheckInspectionTest : RsInspectionsTestBase(RsTypeCheckInspection::c
 
     fun `test typecheck in const argument`() = checkByText("""
         #![feature(const_generics)]
-        struct S<const N: usize>;
-        trait T<const N: usize> {
-            fn foo<const N: usize>(&self) -> S<{ N }>;
+        #![feature(const_generics_defaults)]
+        struct S<const N: usize = <error>1u8</error>>;
+        trait T<const N: usize = <error>1u8</error>> {
+            fn foo<const N: usize>(&self) -> S<N>;
         }
         impl T<<error>1u8</error>> for S<<error>1u8</error>> {
             fn foo<const N: usize>(self) -> S<<error>1u8</error>> { self }
@@ -289,7 +291,7 @@ class RsTypeCheckInspectionTest : RsInspectionsTestBase(RsTypeCheckInspection::c
     """)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
-    fun `test ? expression in closure with different error types`() = checkByText("""
+    fun `test question mark expression in closure with different error types`() = checkByText("""
         struct ErrorTo;
         struct ErrorFrom;
         impl From<ErrorFrom> for ErrorTo {
@@ -363,5 +365,65 @@ class RsTypeCheckInspectionTest : RsInspectionsTestBase(RsTypeCheckInspection::c
                                             // ^^^^ the error should not appear here
             fn from(val: u32) -> Self { Foo(val) }
         }
+    """)
+
+    @MockRustcVersion("1.56.0-nightly")
+    fun `test let else block`() = checkErrors("""
+        #![feature(let_else)]
+
+        fn main() {
+            let _x = 0 else { <error descr="mismatched types [E0308]expected `!`, found `i32`">0</error> };
+            let _y = 0 else { return <error descr="mismatched types [E0308]expected `()`, found `i32`">0</error> };
+        }
+    """)
+
+    fun `test const arguments`() = checkErrors("""
+        fn foo<T, const C: i32>() {}
+        const C1: i32 = 1;
+        const C2: bool = true;
+        struct S;
+
+        fn main() {
+            foo::<i32, 1>;
+            foo::<i32, <error descr="mismatched types [E0308]expected `i32`, found `bool`">true</error>>;
+            foo::<S, C1>;
+            foo::<S, <error descr="mismatched types [E0308]expected `i32`, found `bool`">C2</error>>;
+        }
+    """)
+
+    fun `test const arguments in path exprs`() = checkErrors("""
+        struct S<const N: usize>;
+
+        impl <const N: usize> S<N> {
+            fn foo() {}
+            fn bar(&self) {}
+        }
+
+        fn main() {
+            S::<"">::foo(); // TODO: issue https://github.com/intellij-rust/intellij-rust/issues/8150
+            S::<<error descr="mismatched types [E0308]expected `usize`, found `&str`">""</error>>.bar();
+        }
+    """)
+
+    fun `test no errors about unsizing`() = checkErrors("""
+        #![feature(unsized_tuple_coercion)]
+
+        #[lang = "sized"]  pub trait Sized {}
+        #[lang = "unsize"] pub trait Unsize<T: ?Sized> {}
+        #[lang = "coerce_unsized"] pub trait CoerceUnsized<T: ?Sized> {}
+        impl<'a, T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<&'a U> for &'a T {}
+
+        struct S<T: ?Sized> {
+            head: i32,
+            tail: T,
+        }
+
+        fn main() {
+            let _: &S<[i32]> = &S { head: 0, tail: [1, 2] };
+            let _: &(i32, [u8]) = &(1, [2, 3]);
+            foo(&bar([1, 2, 3]));
+        }
+        fn foo(_: &[u8]) {}
+        fn bar<T>(t: T) -> T { t }
     """)
 }

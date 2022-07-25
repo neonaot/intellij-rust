@@ -7,8 +7,6 @@ package org.rust.ide.inspections
 
 import org.intellij.lang.annotations.Language
 import org.rust.ExpandMacros
-import org.rust.MockEdition
-import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.ide.inspections.fixes.withMockModuleAttachSelector
 
 class RsDetachedFileInspectionTest : RsInspectionsTestBase(RsDetachedFileInspection::class) {
@@ -78,7 +76,6 @@ class RsDetachedFileInspectionTest : RsInspectionsTestBase(RsDetachedFileInspect
         //- a/foo.rs
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test attach file to a parent mod file`() = checkFixByFileTree("Attach file to a.rs", """
         //- lib.rs
             mod a;
@@ -285,6 +282,19 @@ class RsDetachedFileInspectionTest : RsInspectionsTestBase(RsDetachedFileInspect
             //! bar
             mod foo;
         //- foo.rs
+    """)
+
+    fun `test attach file with keywork-like name`() = checkFixByFileTree("Attach file to main.rs", """
+        //- main.rs
+            fn main() {}
+        //- macro.rs
+        <warning descr="File is not included in module tree, analysis is not available"></warning>/*caret*/
+    """, """
+        //- main.rs
+            mod r#macro;
+
+            fn main() {}
+        //- macro.rs
     """)
 
     private fun checkFixWithMultipleModules(

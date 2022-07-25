@@ -15,11 +15,12 @@ import com.intellij.openapi.wm.impl.welcomeScreen.AbstractActionWithPanel
 import com.intellij.platform.DirectoryProjectGenerator
 import com.intellij.platform.DirectoryProjectGeneratorBase
 import com.intellij.platform.ProjectGeneratorPeer
+import com.intellij.util.PathUtil
 import org.rust.cargo.project.settings.rustSettings
 import org.rust.cargo.toolchain.tools.cargo
 import org.rust.ide.icons.RsIcons
 import org.rust.openapiext.computeWithCancelableProgress
-import java.io.File
+import org.rust.stdext.unwrapOrThrow
 import javax.swing.Icon
 
 // We implement `CustomStepProjectGenerator` as well to correctly show settings UI
@@ -34,7 +35,7 @@ class RsDirectoryProjectGenerator : DirectoryProjectGeneratorBase<ConfigurationD
     override fun createPeer(): ProjectGeneratorPeer<ConfigurationData> = RsProjectGeneratorPeer().also { peer = it }
 
     override fun validate(baseDirPath: String): ValidationResult {
-        val crateName = File(baseDirPath).nameWithoutExtension
+        val crateName = PathUtil.getFileName(baseDirPath)
         val message = peer?.settings?.template?.validateProjectName(crateName) ?: return ValidationResult.OK
         return ValidationResult(message)
     }
@@ -45,8 +46,8 @@ class RsDirectoryProjectGenerator : DirectoryProjectGeneratorBase<ConfigurationD
 
         val name = project.name.replace(' ', '_')
         val generatedFiles = project.computeWithCancelableProgress("Generating Cargo project...") {
-            cargo.makeProject(project, module, baseDir, name, template)
-        } ?: return
+            cargo.makeProject(project, module, baseDir, name, template).unwrapOrThrow() // TODO throw? really??
+        }
 
         project.rustSettings.modify {
             it.toolchain = settings.toolchain

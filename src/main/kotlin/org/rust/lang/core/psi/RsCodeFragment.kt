@@ -112,14 +112,19 @@ abstract class RsCodeFragment(
     }
 }
 
-class RsExpressionCodeFragment : RsCodeFragment, RsInferenceContextOwner {
-    constructor(fileViewProvider: FileViewProvider, context: RsElement)
+open class RsExpressionCodeFragment : RsCodeFragment, RsInferenceContextOwner {
+    protected constructor(fileViewProvider: FileViewProvider, context: RsElement)
         : super(fileViewProvider, RsCodeFragmentElementType.EXPR, context)
 
     constructor(project: Project, text: CharSequence, context: RsElement, importTarget: RsItemsOwner? = null)
         : super(project, text, RsCodeFragmentElementType.EXPR, context, importTarget = importTarget)
 
     val expr: RsExpr? get() = childOfType()
+}
+
+class RsDebuggerExpressionCodeFragment : RsExpressionCodeFragment {
+    constructor(fileViewProvider: FileViewProvider, context: RsElement) : super(fileViewProvider, context)
+    constructor(project: Project, text: CharSequence, context: RsElement) : super(project, text, context)
 }
 
 class RsStatementCodeFragment(project: Project, text: CharSequence, context: RsElement)
@@ -169,20 +174,12 @@ class RsReplCodeFragment(fileViewProvider: FileViewProvider, override var contex
     : RsCodeFragment(fileViewProvider, RsCodeFragmentElementType.REPL, context, false),
       RsInferenceContextOwner, RsItemsOwner {
 
-    val expandedStmtsAndTailExpr: Pair<List<RsExpandedElement>, RsExpr?>
-        get() {
-            val expandedElements = childrenOfType<RsExpandedElement>()
-            val tailExpr = expandedElements.lastOrNull()?.let { it as? RsExpr }
-            val stmts = when (tailExpr) {
-                null -> expandedElements
-                else -> expandedElements.subList(0, expandedElements.size - 1)
-            }
-            return stmts to tailExpr
-        }
+    val stmtList: List<RsExpandedElement>
+        get() = childrenOfType()
 
     // if multiple elements have same name, then we keep only last among them
     val namedElementsUnique: Map<String, RsNamedElement>
-        get() = expandedStmtsAndTailExpr.first
+        get() = stmtList
             .filterIsInstance<RsNamedElement>()
             .filter { it.name != null }
             .associateBy { it.name!! }

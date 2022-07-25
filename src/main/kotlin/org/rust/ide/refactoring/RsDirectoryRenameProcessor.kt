@@ -7,7 +7,6 @@ package org.rust.ide.refactoring
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiDirectoryContainer
 import com.intellij.psi.PsiElement
@@ -16,6 +15,7 @@ import com.intellij.refactoring.rename.RenameDialog
 import com.intellij.refactoring.rename.RenamePsiFileProcessor
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.lang.RsConstants
+import org.rust.openapiext.Testmark
 
 class RsDirectoryRenameProcessor : RenamePsiFileProcessor() {
 
@@ -32,7 +32,7 @@ class RsDirectoryRenameProcessor : RenamePsiFileProcessor() {
     }
 
     override fun prepareRenaming(element: PsiElement, newName: String, allRenames: MutableMap<PsiElement, String>) {
-        Testmarks.rustDirRenameHandler.hit()
+        Testmarks.RustDirRenameHandler.hit()
         super.prepareRenaming(element, newName, allRenames)
         if (!RefactoringSettings.getInstance().RENAME_SEARCH_FOR_REFERENCES_FOR_DIRECTORY) return
 
@@ -48,6 +48,6 @@ class RsDirectoryRenameProcessor : RenamePsiFileProcessor() {
         ?: (this as PsiDirectory)
 
     object Testmarks {
-        val rustDirRenameHandler = Testmark("rustDirRename")
+        object RustDirRenameHandler : Testmark()
     }
 }

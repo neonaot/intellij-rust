@@ -16,11 +16,14 @@ data class MappedSubtree(val subtree: TokenTree.Subtree, val tokenMap: TokenMap)
 
 class TokenMap(val map: List<TokenMetadata>) {
     fun get(id: TokenId): TokenMetadata? = map.getOrNull(id)
+    fun merge(other: TokenMap): TokenMap = TokenMap(map + other.map)
 }
 
 sealed class TokenMetadata {
-    data class Token(val startOffset: Int, val rightTrivia: CharSequence): TokenMetadata()
-    data class Delimiter(val open: Token, val close: Token?): TokenMetadata()
+    data class Token(val startOffset: Int, val rightTrivia: CharSequence, val origin: TokenTree.Leaf): TokenMetadata()
+    data class Delimiter(val open: DelimiterPart, val close: DelimiterPart?): TokenMetadata() {
+        data class DelimiterPart(val startOffset: Int, val rightTrivia: CharSequence)
+    }
 }
 
 fun MappedSubtree.toMappedText(): Pair<CharSequence, RangeMap> {
@@ -55,15 +58,14 @@ private class SubtreeTextBuilder(
             is TokenTree.Leaf -> nextTokenTree.id
             is TokenTree.Subtree, null -> null
         }
-        when (this) {
-            is TokenTree.Leaf.Literal -> append(text, id, nextId, Spacing.Alone)
-            is TokenTree.Leaf.Ident -> append(text, id, nextId, Spacing.Alone)
-            is TokenTree.Leaf.Punct -> append(char, id, nextId, spacing)
+        val (text, spacing) = when (this) {
+            is TokenTree.Leaf.Literal -> text to Spacing.Alone
+            is TokenTree.Leaf.Ident -> text to Spacing.Alone
+            is TokenTree.Leaf.Punct -> char to spacing
         }
-    }
 
-    private fun append(text: CharSequence, id: TokenId, nextId: TokenId?, spacing: Spacing) {
         val meta = (tokenMap.get(id) as? TokenMetadata.Token)
+            ?.takeIf { it.origin == this }
         if (meta != null) {
             ranges.mergeAdd(MappedTextRange(meta.startOffset, sb.length, text.length + meta.rightTrivia.length))
         }
@@ -91,7 +93,7 @@ private class SubtreeTextBuilder(
     }
 
     private enum class DelimiterBracePart(
-        val metaGetter: (TokenMetadata.Delimiter) -> TokenMetadata.Token?,
+        val metaGetter: (TokenMetadata.Delimiter) -> TokenMetadata.Delimiter.DelimiterPart?,
         val textGetter: (MacroBraces) -> String
     ) {
         OPEN(TokenMetadata.Delimiter::open, MacroBraces::openText),

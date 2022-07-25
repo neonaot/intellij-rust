@@ -8,7 +8,6 @@ package org.rust.ide.inspections
 import com.intellij.codeInspection.LocalQuickFix
 import com.intellij.codeInspection.ProblemDescriptor
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import org.rust.lang.core.macros.expansionContext
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.EqualityOp
@@ -17,6 +16,7 @@ import org.rust.lang.core.psi.ext.macroName
 import org.rust.lang.core.psi.ext.operatorType
 import org.rust.lang.core.resolve.ImplLookup
 import org.rust.lang.core.types.type
+import org.rust.openapiext.Testmark
 
 class RsAssertEqualInspection : RsLocalInspectionTool() {
     override fun buildVisitor(holder: RsProblemsHolder, isOnTheFly: Boolean): RsVisitor = object : RsVisitor() {
@@ -49,13 +49,13 @@ class RsAssertEqualInspection : RsLocalInspectionTool() {
             val lookup = ImplLookup.relativeTo(expr)
             // The `assert_eq!` macro, as opposed to `assert!`, requires both arguments to implement `core::fmt::Debug`.
             if (!lookup.isDebug(leftType) || !lookup.isDebug(rightType)) {
-                Testmarks.debugTraitIsNotImplemented.hit()
+                Testmarks.DebugTraitIsNotImplemented.hit()
                 return false
             }
             // Don't try to convert `assert!` macro into `assert_eq!/assert_ne!`
             // if expressions can't be compared at all
             if (!lookup.isPartialEq(leftType, rightType)) {
-                Testmarks.partialEqTraitIsNotImplemented.hit()
+                Testmarks.PartialEqTraitIsNotImplemented.hit()
                 return false
             }
             return true
@@ -95,7 +95,7 @@ class RsAssertEqualInspection : RsLocalInspectionTool() {
     }
 
     object Testmarks {
-        val partialEqTraitIsNotImplemented = Testmark("partialEqTraitIsNotImplemented")
-        val debugTraitIsNotImplemented = Testmark("debugTraitIsNotImplemented")
+        object PartialEqTraitIsNotImplemented : Testmark()
+        object DebugTraitIsNotImplemented : Testmark()
     }
 }

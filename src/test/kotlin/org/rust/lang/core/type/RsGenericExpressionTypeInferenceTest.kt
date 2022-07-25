@@ -5,6 +5,7 @@
 
 package org.rust.lang.core.type
 
+import org.rust.CheckTestmarkHit
 import org.rust.lang.core.types.infer.TypeInferenceMarks
 
 class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
@@ -1223,6 +1224,7 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         }                       //^ u8
     """)
 
+    @CheckTestmarkHit(TypeInferenceMarks.MethodPickCollapseTraits::class)
     fun `test infer method arg with multiple impls of the same trait`() = testExpr("""
         pub trait Tr<T> { fn foo(&self, _: T); }
         struct S; struct S1;
@@ -1231,7 +1233,7 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         fn main() {
             S.foo(0)
         }       //^ u8
-    """, TypeInferenceMarks.methodPickCollapseTraits)
+    """)
 
     fun `test infer method arg with multiple impls of the same trait UFCS`() = testExpr("""
         pub trait Tr<T> { fn foo(&self, _: T); }
@@ -1244,6 +1246,7 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         }             //^ u8
     """)
 
+    @CheckTestmarkHit(TypeInferenceMarks.MethodPickCollapseTraits::class)
     fun `test infer method arg with multiple impls of the same trait on multiple deref levels`() = testExpr("""
         #[lang = "deref"]
         trait Deref { type Target; }
@@ -1263,7 +1266,7 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
             let a = A.foo(0u16);
             a;
         } //^ i16
-    """, TypeInferenceMarks.methodPickCollapseTraits)
+    """)
 
     fun `test infer type by reference coercion`() = testExpr("""
         #[lang = "deref"]
@@ -1366,6 +1369,17 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         trait Tr1<A> { fn foo(&self) -> A { unimplemented!() } }
         trait Tr2<B>: Tr1<B> {}
         fn bar<'a, T>(t: &'a T) where &'a T: Tr2<u8> {
+            let a = t.foo();
+            a;
+        } //^ u8
+    """)
+
+    fun `test inherited generic type parameter method with bound for reference type 2`() = testExpr("""
+        type Alias<'a, T> = &'a T;
+
+        trait Tr1<A> { fn foo(&self) -> A { unimplemented!() } }
+        trait Tr2<B>: Tr1<B> {}
+        fn bar<'a, T>(t: Alias<'a, T>) where &'a T: Tr2<u8> {
             let a = t.foo();
             a;
         } //^ u8
@@ -1505,6 +1519,28 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
             let b = new().foo();
             b;
         } //^ u8
+    """)
+
+    fun `test infer associated type binding from supertrait`() = testExpr("""
+        trait Parent {
+            type Item;
+            fn item(&self) -> Self::Item;
+        }
+        trait Child : Parent {}
+
+        struct Foo;
+        struct Bar;
+        impl Parent for Foo {
+            type Item = Bar;
+            fn item(&self) -> Self::Item { unimplemented!() }
+        }
+        impl Child for Foo {}
+
+        fn new() -> impl Child<Item = Bar> { unimplemented!() }
+        fn main() {
+            let bar = new().item();
+            bar;
+        } //^ Bar
     """)
 
     fun `test select trait from unconstrained integer`() = testExpr("""
@@ -1695,6 +1731,14 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         } //^ S<i32>
     """)
 
+    fun `test default const argument is not used in expression context 1`() = testExpr("""
+        struct S<const N: usize = 1>;
+        fn main() {
+            let a = S;
+            a;
+        } //^ S<<unknown>>
+    """)
+
     fun `test default type argument is not used in expression context 2`() = testExpr("""
         struct S<T = X>(T);
         struct X;
@@ -1705,6 +1749,18 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
             let a = S::new(1);
             a;
         } //^ S<i32>
+    """)
+
+    fun `test default const argument is not used in expression context 2`() = testExpr("""
+        struct S<const N: usize = 1>;
+        impl<const N: usize> S<N> {
+            fn new() -> S<N> { S }
+        }
+
+        fn main() {
+            let a = S::new();
+            a;
+        } //^ S<<unknown>>
     """)
 
     fun `test default type argument is used in expression context`() = testExpr("""
@@ -1718,6 +1774,17 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         } //^ S<i32, ()>
     """)
 
+    fun `test default const argument is used in expression context`() = testExpr("""
+        struct S<const N: usize, const M: usize = 1>;
+        impl<const N: usize> S<N, 1> {
+            fn id(self) -> Self { unimplemented!() }
+        }
+        fn main() {
+            let s = S::<0>.id();
+            s;
+        } //^ S<0, 1>
+    """)
+
     fun `test default type argument is not used in pat context`() = testExpr("""
         struct S<T = X>(T);
         struct X;
@@ -1725,6 +1792,14 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
             let S(a) = S(1);
             a;
         } //^ i32
+    """)
+
+    fun `test default const argument is not used in pat context`() = testExpr("""
+        struct S<const N: usize = 1>([i32; N]);
+        fn main() {
+            let S(a) = S([1, 2, 3]);
+            a;
+        } //^ [i32; 3]
     """)
 
     fun `test default type argument is used in type context 1`() = testExpr("""
@@ -1735,12 +1810,26 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         } //^ S<X>
     """)
 
+    fun `test default const argument is used in type context 1`() = testExpr("""
+        struct S<const N: usize = 1>;
+        fn foo(s: S) {
+            s;
+        } //^ S<1>
+    """)
+
     fun `test default type argument is used in type context 2`() = testExpr("""
         struct S<T1 = X, T2 = Y>(T1, T2);
         struct X; struct Y;
         fn foo(s: S<u8>) {
             s;
         } //^ S<u8, Y>
+    """)
+
+    fun `test default const argument is used in type context 2`() = testExpr("""
+        struct S<const N1: usize = 1, const N2: usize = 2>;
+        fn foo(s: S<0>) {
+            s;
+        } //^ S<0, 2>
     """)
 
     fun `test type argument is unknown if not passed`() = testExpr("""
@@ -1866,6 +1955,31 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
         } //^ X
     """)
 
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowParamCandidateWins::class)
+    fun `test assoc type bound does not conflict with type bound`() = testExpr("""
+        struct X;
+        trait Foo<T> {}
+        fn foo<A: Foo<B>, B>(_: A) -> B { unimplemented!() }
+        trait Bar { type Item: Foo<X>; }
+        fn bar<T: Bar>(_: T, b: T::Item) where T::Item: Foo<X> {
+            let a = foo(b);
+            a;
+        } //^ X
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowObjectOrProjectionCandidateWins::class)
+    fun `test assoc type bound wins over blanket impl`() = testExpr("""
+        struct X;
+        trait Foo<T> {}
+        impl<T> Foo<X> for T {}
+        fn foo<A: Foo<B>, B>(_: A) -> B { unimplemented!() }
+        trait Bar { type Item: Foo<X>; }
+        fn bar<T: Bar>(_: T, b: T::Item) {
+            let a = foo(b);
+            a;
+        } //^ X
+    """)
+
     fun `test infer type parameter from associated type binding`() = testExpr("""
         trait Foo { type Item; }
         fn foo<A, B>(a: A) -> B where A: Foo<Item = B> { unimplemented!() }
@@ -1909,5 +2023,221 @@ class RsGenericExpressionTypeInferenceTest : RsTypificationTestBase() {
             let a = foo(t);
             a;
         } //^ S
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowParamCandidateWins::class)
+    fun `test infer type parameter from blank impl 3`() = testExpr("""
+        struct W<T>(T);
+        struct S;
+        trait Foo<O> {}
+        impl<T> Foo<S> for W<T> {}
+        fn foo<T: Foo<B>, B>(t: T) -> B { todo!() }
+        fn bar<T>(t: W<T>) where W<T>: Foo<S> {
+            let a = foo(t);
+            a;
+        } //^ S
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowParamCandidateLoses::class)
+    fun `test global type bound does not affect type inference`() = testExpr("""
+        struct S;
+        struct X;
+        trait Foo<O> {}
+        impl Foo<X> for S {}
+        fn foo<T: Foo<B>, B>(t: T) -> B { todo!() }
+        fn bar(t: S) where S: Foo<X> {
+            let a = foo(t);
+            a;
+        } //^ X
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowObjectOrProjectionCandidateWins::class)
+    fun `test trait object wins over blank impl`() = testExpr("""
+        struct S;
+        trait Foo<O> {}
+        impl<T> Foo<S> for T {}
+        fn foo<T: Foo<B> + ?Sized, B>() -> B { todo!() }
+        fn bar() {
+            let a = foo::<dyn Foo<S>, _>();
+            a;
+        } //^ S
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.WinnowObjectOrProjectionCandidateWins::class)
+    fun `test 'impl Trait' wins over blank impl`() = testExpr("""
+        struct S;
+        trait Foo<O> {}
+        impl<T> Foo<S> for T {}
+        fn foo<T: Foo<B>, B>(t: T) -> B { todo!() }
+        fn impl_foo() -> impl Foo<S> { todo!() }
+        fn bar() {
+            let a = foo(impl_foo());
+            a;
+        } //^ S
+    """)
+
+    // https://github.com/intellij-rust/intellij-rust/issues/5897
+    fun `test issue 5897`() = testExpr("""
+        trait Index<Idx: ?Sized> {
+            type Output: ?Sized;
+            fn index(&self, index: Idx) -> &Self::Output;
+        }
+
+        struct Slice1<T>(T);
+        impl<T> Index<usize> for Slice1<T> {
+            type Output = T;
+            fn index(&self, _: usize) -> &Self::Output { todo!() }
+        }
+
+        struct Slice2;
+        impl Index<usize> for Slice2 {
+            type Output = <Slice1<u32> as Index<usize>>::Output;
+            fn index(&self, _: usize) -> &Self::Output { todo!() }
+        }
+        fn bar(x: Slice2) {
+            let a = *x.index(0);
+            a;
+        } //^ u32
+    """)
+
+    fun `test select impl with associated type projection through type alias`() = testExpr("""
+        struct A;
+        pub trait Trait<T> { type Item; }
+        impl Trait<i32> for A { type Item = u32; }
+        impl Trait<i8> for A { type Item = u8; }
+
+        pub type Unsigned<T> = <A as Trait<T>>::Item;
+
+        struct B<T>(T);
+        trait Trait2 {
+            type Item2;
+        }
+        impl Trait2 for B<Unsigned<i32>> {
+            type Item2 = u32;
+        }
+        impl Trait2 for B<Unsigned<i8>> {
+            type Item2 = u8;
+        }
+        fn foo<C: Trait2>(_: C) -> C::Item2 { unimplemented!() }
+        fn bar(a: B<Unsigned<i8>>) {
+            let a = foo(a);
+            a;
+        } //^ u8
+    """)
+
+    // Issue https://github.com/intellij-rust/intellij-rust/issues/8236
+    fun `test select impl with associated type projection in trait ref`() = testExpr("""
+        struct S;
+        struct X;
+        trait Trait { type Item; }
+        impl Trait for S { type Item = X; }
+
+        trait Bound<A> {}
+        impl Bound<<S as Trait>::Item> for S {}
+
+        fn foo<B, C>(_: B) -> C where B: Bound<C> { todo!() }
+        fn main() {
+            let a = foo(S);
+            a;
+        } //^ X
+    """)
+
+    fun `test trait impl with default type parameter value`() = testExpr("""
+        struct X;
+        trait Tr<T = X> { fn foo(&self) -> T { todo!() } }
+        struct S;
+        impl Tr for S {}
+        fn foo() {
+            let a = S.foo();
+            a;
+        } //^ X
+    """)
+
+    fun `test trait impl with default const parameter value`() = testExpr("""
+        trait Tr<const T: usize = 1> { fn foo(&self) -> [i32; T] { todo!() } }
+
+        struct S;
+        impl Tr for S {}
+
+        fn foo() {
+            let a = S.foo();
+            a;
+        } //^ [i32; 1]
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.TraitSelectionOverflow::class)
+    fun `test recursion limit for associated type projection`() = testExpr("""
+        trait Trait { type Item; }
+
+        struct W<T>(T);
+        impl<T: Trait> Trait for W<T> {
+            type Item = T::Item;
+        }
+
+        struct X;
+        impl Trait for X {
+            type Item = i32;
+        }
+
+        // More than 128-level nesting
+        type T = W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+            W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                    W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                        X
+                    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+            >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>;
+
+        fn foo(a: <T as Trait>::Item) {
+            a;
+        } //^ <unknown>
+    """)
+
+    @CheckTestmarkHit(TypeInferenceMarks.TraitSelectionOverflow::class)
+    fun `test recursion limit for trait selection`() = testExpr("""
+        trait Trait<T> {}
+
+        struct W<T>(T);
+        impl<A: Trait<B>, B> Trait<B> for W<A> {}
+
+        struct X;
+        impl Trait<i32> for X {}
+
+        // More than 128-level nesting
+        type T = W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+            W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                    W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<
+                        X
+                    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+            >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>;
+
+        fn foo<A: Trait<B>, B>(_: A) -> B {
+            todo!()
+        }
+
+        fn bar(a: T) {
+            let b = foo(a);
+            b;
+        } //^ <unknown>
+    """)
+
+    fun `test duplicated trait bounds`() = testExpr("""
+        struct S;
+        struct X;
+        trait Foo<O> {}
+
+        fn foo<T: Foo<B>, B>(t: T) -> B {
+            todo!()
+        }
+
+        fn bar<T: Foo<X> + Foo<X>>(t: T) {
+            let a = foo(t);
+            a;
+        } //^ X
     """)
 }

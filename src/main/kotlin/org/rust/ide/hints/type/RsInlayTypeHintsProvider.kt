@@ -16,6 +16,7 @@ import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import org.rust.RsBundle
 import org.rust.lang.RsLanguage
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
@@ -32,7 +33,7 @@ import javax.swing.JPanel
 class RsInlayTypeHintsProvider : InlayHintsProvider<RsInlayTypeHintsProvider.Settings> {
     override val key: SettingsKey<Settings> get() = KEY
 
-    override val name: String get() = "Type hints"
+    override val name: String get() = RsBundle.message("settings.rust.inlay.hints.title.types")
 
     override val previewText: String
         get() = """
@@ -43,15 +44,28 @@ class RsInlayTypeHintsProvider : InlayHintsProvider<RsInlayTypeHintsProvider.Set
             }
             """.trimIndent()
 
+    override val group: InlayGroup
+        get() = InlayGroup.TYPES_GROUP
+
     override fun createConfigurable(settings: Settings): ImmediateConfigurable = object : ImmediateConfigurable {
 
+        override val mainCheckboxText: String
+            get() = RsBundle.message("settings.rust.inlay.hints.for")
+
+        /**
+         * Each case may have:
+         *  * Description provided by [InlayHintsProvider.getProperty].
+         *  Property key has `inlay.%[InlayHintsProvider.key].id%.%case.id%` structure
+         *
+         *  * Preview taken from `resource/inlayProviders/%[InlayHintsProvider.key].id%/%case.id%.rs` file
+         */
         override val cases: List<Case>
             get() = listOf(
-                Case("Show for variables", "variables", settings::showForVariables),
-                Case("Show for closures", "closures", settings::showForLambdas),
-                Case("Show for loop variables", "loop_variables", settings::showForIterators),
-                Case("Show for type placeholders", "type_placeholders", settings::showForPlaceholders),
-                Case("Show obvious types", "obvious_types", settings::showObviousTypes)
+                Case(RsBundle.message("settings.rust.inlay.hints.for.variables"), "variables", settings::showForVariables),
+                Case(RsBundle.message("settings.rust.inlay.hints.for.closures"), "closures", settings::showForLambdas),
+                Case(RsBundle.message("settings.rust.inlay.hints.for.loop.variables"), "loop_variables", settings::showForIterators),
+                Case(RsBundle.message("settings.rust.inlay.hints.for.type.placeholders"), "type_placeholders", settings::showForPlaceholders),
+                Case(RsBundle.message("settings.rust.inlay.hints.for.obvious.types"), "obvious_types", settings::showObviousTypes)
             )
 
         override fun createComponent(listener: ChangeListener): JComponent = JPanel()
@@ -59,15 +73,17 @@ class RsInlayTypeHintsProvider : InlayHintsProvider<RsInlayTypeHintsProvider.Set
 
     override fun createSettings(): Settings = Settings()
 
-    override fun getCollectorFor(file: PsiFile, editor: Editor, settings: Settings, sink: InlayHintsSink): InlayHintsCollector =
-        object : FactoryInlayHintsCollector(editor) {
+    override fun getCollectorFor(file: PsiFile, editor: Editor, settings: Settings, sink: InlayHintsSink): InlayHintsCollector {
+        val project = file.project
+        val crate = (file as? RsFile)?.crate
+        
+        return object : FactoryInlayHintsCollector(editor) {
 
             val typeHintsFactory = RsTypeHintsPresentationFactory(factory, settings.showObviousTypes)
 
             override fun collect(element: PsiElement, editor: Editor, sink: InlayHintsSink): Boolean {
-                if (file.project.service<DumbService>().isDumb) return true
+                if (project.service<DumbService>().isDumb) return true
                 if (element !is RsElement) return true
-                if (!element.existsAfterExpansion) return true
 
                 if (settings.showForVariables) {
                     presentVariable(element)
@@ -107,6 +123,7 @@ class RsInlayTypeHintsProvider : InlayHintsProvider<RsInlayTypeHintsProvider.Set
             }
 
             private fun presentTypePlaceholders(declaration: RsLetDecl) {
+                if (!declaration.existsAfterExpansion(crate)) return
                 val inferredType = declaration.pat?.type ?: return
                 val formalType = declaration.typeReference?.type ?: return
                 val placeholders = formalType.collectInferTys()
@@ -162,12 +179,13 @@ class RsInlayTypeHintsProvider : InlayHintsProvider<RsInlayTypeHintsProvider.Set
             }
 
             private fun presentTypeForBinding(binding: RsPatBinding) {
-                val project = binding.project
+                if (!binding.existsAfterExpansion(crate)) return
                 val presentation = typeHintsFactory.typeHint(binding.type)
                 val finalPresentation = presentation.withDisableAction(project)
                 sink.addInlineElement(binding.endOffset, false, finalPresentation, false)
             }
         }
+    }
 
     private fun InlayPresentation.withDisableAction(project: Project): InsetPresentation = InsetPresentation(
         MenuOnClickPresentation(this, project) {

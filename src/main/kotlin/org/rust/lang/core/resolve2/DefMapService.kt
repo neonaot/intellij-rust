@@ -7,25 +7,20 @@ package org.rust.lang.core.resolve2
 
 import com.intellij.injected.editor.VirtualFileWindow
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.runWriteAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.ModificationTracker
 import com.intellij.openapi.vfs.VirtualFileWithId
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiTreeChangeEvent
-import com.intellij.util.containers.ContainerUtil
 import com.intellij.util.containers.MultiMap
-import com.intellij.util.ref.GCWatcher
 import org.jetbrains.annotations.TestOnly
 import org.rust.RsTask.TaskType.*
 import org.rust.cargo.project.model.CargoProjectsService
 import org.rust.cargo.project.model.CargoProjectsService.CargoProjectsListener
-import org.rust.cargo.project.settings.rustSettings
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.MacroExpansionMode
@@ -33,16 +28,21 @@ import org.rust.lang.core.macros.macroExpansionManager
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.RsPsiTreeChangeEvent.*
 import org.rust.openapiext.checkWriteAccessAllowed
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.pathAsPath
 import org.rust.stdext.mapToSet
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 
 /** Stores [CrateDefMap] and data needed to determine whether [defMap] is up-to-date. */
-class DefMapHolder(private val structureModificationTracker: ModificationTracker) {
+class DefMapHolder(
+    val crateId: CratePersistentId,
+    private val structureModificationTracker: ModificationTracker,
+) {
 
     /**
      * Write access requires read action with [DefMapService.defMapsBuildLock] or write action.
@@ -73,6 +73,8 @@ class DefMapHolder(private val structureModificationTracker: ModificationTracker
             )
         }
     }
+
+    val modificationCount: Long get() = defMapStamp.get()
 
     /**
      * If true then we should rebuild [defMap], regardless of [shouldRecheck] or [changedFiles] values.
@@ -132,13 +134,8 @@ class DefMapHolder(private val structureModificationTracker: ModificationTracker
 @Service
 class DefMapService(val project: Project) : Disposable {
 
-    /**
-     * Concurrent because [DefMapsBuilder] uses multiple threads.
-     * [DefMapHolder]s are stored under soft references, so they will be cleared if IDE is low on memory.
-     * [DefMapHolder] can't be garbage collected while [CrateDefMap] is build,
-     * see [DefMapUpdater.runWithStrongReferencesToDefMapHolders].
-     */
-    private val defMaps: ConcurrentMap<CratePersistentId, DefMapHolder> = ContainerUtil.createConcurrentSoftValueMap()
+    /** Concurrent because [DefMapsBuilder] uses multiple threads. */
+    private val defMaps: ConcurrentMap<CratePersistentId, DefMapHolder> = ConcurrentHashMap()
     val defMapsBuildLock: ReentrantLock = ReentrantLock()
 
     private val fileIdToCrateId: MultiMap<FileId, CratePersistentId> = MultiMap.createConcurrent()
@@ -151,6 +148,9 @@ class DefMapService(val project: Project) : Disposable {
 
     init {
         setupListeners()
+        if (System.getenv("INTELLIJ_RUST_FORCE_USE_OLD_RESOLVE") != null) {
+            IS_NEW_RESOLVE_ENABLED_KEY.setValue(false)
+        }
     }
 
     /**
@@ -158,7 +158,7 @@ class DefMapService(val project: Project) : Disposable {
      * - After IDE restart: full recheck (for each crate compare [CrateMetaData] and `modificationStamp` of each file).
      *   Tasks [CARGO_SYNC] and [MACROS_UNPROCESSED] are executed.
      * - File changed: calculate hash and compare with hash stored in [CrateDefMap.fileInfos].
-     *   Task [MACROS_WORKSPACE] is executed.
+     *   Task [MACROS_FULL] is executed.
      * - File added: check whether [missedFiles] contains file path
      * - File deleted: check whether [fileIdToCrateId] contains this file
      * - Crate workspace changed: full recheck
@@ -184,7 +184,7 @@ class DefMapService(val project: Project) : Disposable {
     }
 
     fun getDefMapHolder(crate: CratePersistentId): DefMapHolder {
-        return defMaps.computeIfAbsent(crate) { DefMapHolder(structureModificationTracker) }
+        return defMaps.computeIfAbsent(crate) { DefMapHolder(crate, structureModificationTracker) }
     }
 
     fun hasDefMapFor(crate: CratePersistentId): Boolean = defMaps[crate] != null
@@ -256,20 +256,6 @@ class DefMapService(val project: Project) : Disposable {
         }
     }
 
-    fun onNewResolveEnabledChanged(newResolveEnabled: Boolean) {
-        if (isUnitTestMode) return
-        project.rustPsiManager.incRustStructureModificationCount()
-        if (newResolveEnabled) {
-            runWriteAction {
-                scheduleRebuildAllDefMaps()
-            }
-        } else {
-            defMaps.clear()
-            fileIdToCrateId.clear()
-            missedFiles.clear()
-        }
-    }
-
     /** Removes DefMaps for crates not in crate graph */
     fun removeStaleDefMaps(allCrates: List<Crate>) {
         val allCrateIds = allCrates.mapToSet { it.id }
@@ -281,11 +267,6 @@ class DefMapService(val project: Project) : Disposable {
         }
         fileIdToCrateId.values().removeIf { it in staleCrates }
         missedFiles.values.removeIf { it in staleCrates }
-    }
-
-    @TestOnly
-    fun forceClearSoftReferences() {
-        GCWatcher.tracking(defMaps.values).ensureCollected()
     }
 
     override fun dispose() {}
@@ -322,14 +303,15 @@ class DefMapService(val project: Project) : Disposable {
         }
     }
 
+    @TestOnly
+    fun setNewResolveEnabled(disposable: Disposable, value: Boolean) {
+        check(isUnitTestMode)
+        IS_NEW_RESOLVE_ENABLED_KEY.setValue(value, disposable)
+    }
+
     companion object {
-        @TestOnly
-        fun setNewResolveEnabled(project: Project, disposable: Disposable, value: Boolean) {
-            check(isUnitTestMode)
-            project.rustSettings.modifyTemporary(disposable) {
-                it.newResolveEnabled = value
-            }
-        }
+        private val nextNonCargoCrateId: AtomicInteger = AtomicInteger(-1)
+        fun getNextNonCargoCrateId(): Int = nextNonCargoCrateId.decrementAndGet()
     }
 }
 

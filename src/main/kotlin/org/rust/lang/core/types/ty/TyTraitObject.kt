@@ -59,10 +59,25 @@ class TyTraitObject(
         javaClass != other?.javaClass -> false
         other !is TyTraitObject -> false
         traits != other.traits -> false
+        aliasedBy != other.aliasedBy -> false
         else -> true
     }
 
     override fun hashCode(): Int = traits.hashCode()
+
+    override fun isEquivalentToInner(other: Ty): Boolean {
+        if (this === other) return true
+        if (other !is TyTraitObject) return false
+
+        if (traits.size != other.traits.size) return false
+        for (i in traits.indices) {
+            val be1 = traits[i]
+            val be2 = other.traits[i]
+            if (!be1.isEquivalentTo(be2)) return false
+        }
+
+        return true
+    }
 
     companion object {
         fun valueOf(trait: RsTraitItem): TyTraitObject {

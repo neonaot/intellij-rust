@@ -7,9 +7,6 @@ package org.rust.lang.core.resolve
 
 import org.intellij.lang.annotations.Language
 import org.rust.ExpandMacros
-import org.rust.MockEdition
-import org.rust.UseNewResolve
-import org.rust.cargo.project.workspace.CargoWorkspace
 
 class RsIncludeMacroResolveTest : RsResolveTestBase() {
 
@@ -102,7 +99,8 @@ class RsIncludeMacroResolveTest : RsResolveTestBase() {
                   //^ lib.rs
     """)
 
-    fun `test include in function local module`() = checkResolve("""
+    fun `test include in function local module`() = expect<IllegalStateException> {
+    checkResolve("""
     //- lib.rs
         fn foo() {
             mod foo {
@@ -114,6 +112,7 @@ class RsIncludeMacroResolveTest : RsResolveTestBase() {
     //- bar.rs
         struct Foo;
     """)
+    }
 
     fun `test include file in included file 1`() = checkResolve("""
     //- lib.rs
@@ -188,9 +187,7 @@ class RsIncludeMacroResolveTest : RsResolveTestBase() {
         pub struct Foo;
     """)
 
-    @UseNewResolve
     @ExpandMacros
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test macro call in included file 1`() = checkResolve("""
     //- main.rs
         macro_rules! foo {
@@ -202,9 +199,7 @@ class RsIncludeMacroResolveTest : RsResolveTestBase() {
         //^ main.rs
     """)
 
-    @UseNewResolve
     @ExpandMacros
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test macro call in included file 2`() = checkResolve("""
     //- main.rs
         macro_rules! gen_use {
@@ -221,6 +216,16 @@ class RsIncludeMacroResolveTest : RsResolveTestBase() {
         } //^ main.rs
     //- foo.rs
         gen_use!();
+    """)
+
+    fun `test macro def in included file`() = checkResolve("""
+    //- main.rs
+        include!("foo.rs");
+        mod other {
+            foo!();
+        } //^ foo.rs
+    //- foo.rs
+        macro_rules! foo { () => {} }
     """)
 
     fun `test concat in include 1`() = checkResolve("""

@@ -20,7 +20,7 @@ import org.rust.lang.core.psi.RsElementTypes.RPAREN
 import org.rust.lang.core.psi.ext.RsElement
 import org.rust.lang.core.psi.ext.childrenWithLeaves
 import org.rust.lang.core.psi.ext.elementType
-import org.rust.lang.core.psi.ext.getVisibleBindings
+import org.rust.lang.core.psi.ext.getLocalVariableVisibleBindings
 import org.rust.lang.core.resolve.knownItems
 import org.rust.lang.core.types.inference
 import org.rust.lang.core.types.ty.Ty
@@ -42,16 +42,12 @@ class FillFunctionArgumentsFix(element: PsiElement) : LocalQuickFixAndIntentionA
         val arguments = startElement.parentOfType<RsValueArgumentList>(true) ?: return
         val parent = arguments.parent as? RsElement ?: return
 
-        val requiredParameterCount = when (parent) {
-            is RsCallExpr -> parent.getFunctionCallContext()?.expectedParameterCount
-            is RsMethodCall -> parent.getFunctionCallContext()?.expectedParameterCount
-            else -> null
-        } ?: return
+        val requiredParameterCount = arguments.getFunctionCallContext()?.expectedParameterCount ?: return
         val parameters = getParameterTypes(parent)?.take(requiredParameterCount) ?: return
 
         val factory = RsPsiFactory(project)
         val builder = RsDefaultValueBuilder(parent.knownItems, parent.containingMod, factory)
-        val bindings = parent.getVisibleBindings()
+        val bindings = parent.getLocalVariableVisibleBindings()
 
         // We are currently looking for an argument for this parameter
         var parameterIndex = 0

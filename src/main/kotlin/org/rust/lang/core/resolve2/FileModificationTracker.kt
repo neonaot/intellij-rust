@@ -5,7 +5,6 @@
 
 package org.rust.lang.core.resolve2
 
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.util.io.DigestUtil
 import com.intellij.util.io.IOUtil
 import org.rust.lang.core.crate.Crate
@@ -17,6 +16,7 @@ import org.rust.lang.core.stubs.RsMacroCallStub
 import org.rust.lang.core.stubs.RsModItemStub
 import org.rust.lang.core.stubs.RsNamedStub
 import org.rust.openapiext.fileId
+import org.rust.openapiext.isUnitTestMode
 import org.rust.stdext.BitFlagsBuilder
 import org.rust.stdext.HashCode
 import org.rust.stdext.writeVarInt
@@ -38,6 +38,9 @@ fun isFileChanged(file: RsFile, defMap: CrateDefMap, crate: Crate): Boolean {
         return false
     }
 
+    val isCrateRoot = file.virtualFile == crate.rootModFile
+    if (isCrateRoot && file.getRecursionLimit(crate) != defMap.recursionLimitRaw) return true
+
     val isEnabledByCfgInner = file.isEnabledByCfgSelf(crate)
     // Don't use `file.isDeeplyEnabledByCfg` - it can trigger resolve (and cause infinite recursion)
     val isDeeplyEnabledByCfg = fileInfo.modData.isDeeplyEnabledByCfgOuter && isEnabledByCfgInner
@@ -46,17 +49,15 @@ fun isFileChanged(file: RsFile, defMap: CrateDefMap, crate: Crate): Boolean {
         crate,
         hashCalculator,
         fileRelativePath = "",
-        collectChildModules = true
+        collectChildModules = true,
+        stdlibAttributes = if (isCrateRoot) file.getStdlibAttributes(crate) else null,
     )
-    val fileStub = file.getOrBuildStub() ?: return false
+    val fileStub = file.getOrBuildFileStub() ?: return false
     ModCollectorBase.collectMod(fileStub, isDeeplyEnabledByCfg, visitor, crate)
-    if (file.virtualFile == crate.rootModFile) {
-        visitor.modData.attributes = file.getStdlibAttributes(crate)
-    }
     return hashCalculator.getFileHash() != fileInfo.hash
 }
 
-private fun calculateModHash(modData: ModDataLight): HashCode {
+private fun calculateModHash(modData: ModDataLight, stdlibAttributes: RsFile.Attributes?): HashCode {
     val digest = DigestUtil.sha1()
     val data = DataOutputStream(DigestOutputStream(OutputStream.nullOutputStream(), digest))
 
@@ -65,9 +66,10 @@ private fun calculateModHash(modData: ModDataLight): HashCode {
     data.writeElements(modData.enums)
     data.writeElements(modData.imports)
     data.writeElements(modData.macroCalls)
+    data.writeElements(modData.procMacroCalls)
     data.writeElements(modData.macroDefs)
     data.writeElements(modData.macro2Defs)
-    data.writeByte(modData.attributes?.ordinal ?: RsFile.Attributes.values().size)
+    data.writeByte(stdlibAttributes?.ordinal ?: RsFile.Attributes.values().size)
 
     return HashCode.fromByteArray(digest.digest())
 }
@@ -77,9 +79,9 @@ private class ModDataLight {
     val enums: MutableList<EnumLight> = mutableListOf()
     val imports: MutableList<ImportLight> = mutableListOf()
     val macroCalls: MutableList<MacroCallLight> = mutableListOf()
+    val procMacroCalls: MutableList<ProcMacroCallLight> = mutableListOf()
     val macroDefs: MutableList<MacroDefLight> = mutableListOf()
     val macro2Defs: MutableList<Macro2DefLight> = mutableListOf()
-    var attributes: RsFile.Attributes? = null  // not null only for crate root
 
     fun sort() {
         items.sortBy { it.name }
@@ -97,8 +99,8 @@ class HashCalculator(private val isEnabledByCfgInner: Boolean) {
 
     private data class ModHash(val fileRelativePath: String, val hash: HashCode)
 
-    fun getVisitor(crate: Crate, fileRelativePath: String): ModVisitor =
-        ModLightCollector(crate, this, fileRelativePath)
+    fun getVisitor(crate: Crate, fileRelativePath: String, stdlibAttributes: RsFile.Attributes?): ModVisitor =
+        ModLightCollector(crate, this, fileRelativePath, stdlibAttributes = stdlibAttributes)
 
     fun onCollectMod(fileRelativePath: String, hash: HashCode) {
         modulesHash += ModHash(fileRelativePath, hash)
@@ -122,6 +124,8 @@ private class ModLightCollector(
     private val hashCalculator: HashCalculator,
     private val fileRelativePath: String,
     private val collectChildModules: Boolean = false,
+    /** not null only for crate root */
+    private val stdlibAttributes: RsFile.Attributes?,
 ) : ModVisitor {
 
     val modData: ModDataLight = ModDataLight()
@@ -162,6 +166,10 @@ private class ModLightCollector(
         modData.macroCalls += call
     }
 
+    override fun collectProcMacroCall(call: ProcMacroCallLight) {
+        modData.procMacroCalls += call
+    }
+
     override fun collectMacroDef(def: MacroDefLight) {
         modData.macroDefs += def
     }
@@ -171,7 +179,7 @@ private class ModLightCollector(
     }
 
     override fun afterCollectMod() {
-        val fileHash = calculateModHash(modData)
+        val fileHash = calculateModHash(modData, stdlibAttributes)
         hashCalculator.onCollectMod(fileRelativePath, fileHash)
     }
 
@@ -181,7 +189,8 @@ private class ModLightCollector(
             crate,
             hashCalculator,
             fileRelativePath,
-            collectChildModules = true
+            collectChildModules = true,
+            stdlibAttributes = null,
         )
         ModCollectorBase.collectMod(mod, isDeeplyEnabledByCfg, visitor, crate)
     }

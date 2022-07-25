@@ -6,9 +6,10 @@
 package org.rust.ide.inspections
 
 import org.intellij.lang.annotations.Language
-import org.rust.MockAdditionalCfgOptions
-import org.rust.ProjectDescriptor
-import org.rust.WithStdlibAndDependencyRustProjectDescriptor
+import org.rust.*
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
+import org.rust.ide.experiments.RsExperiments.EVALUATE_BUILD_SCRIPTS
+import org.rust.ide.experiments.RsExperiments.PROC_MACROS
 import org.rust.ide.inspections.import.AutoImportFix
 
 class RsUnresolvedReferenceInspectionTest : RsInspectionsTestBase(RsUnresolvedReferenceInspection::class) {
@@ -106,6 +107,7 @@ class RsUnresolvedReferenceInspectionTest : RsInspectionsTestBase(RsUnresolvedRe
         }
     """)
 
+    @CheckTestmarkHit(AutoImportFix.Testmarks.NameInScope::class)
     fun `test do not highlight unresolved path references if name is in scope`() = checkByText("""
         use foo::Foo;
 
@@ -116,7 +118,7 @@ class RsUnresolvedReferenceInspectionTest : RsInspectionsTestBase(RsUnresolvedRe
         fn main() {
             Foo
         }
-    """, testmark = AutoImportFix.Testmarks.nameInScope)
+    """)
 
     fun `test do not highlight unresolved method of trait bound if multiple defs (invalid code)`() = checkByText("""
         mod foo {
@@ -212,12 +214,156 @@ class RsUnresolvedReferenceInspectionTest : RsInspectionsTestBase(RsUnresolvedRe
         extern crate unknown_crate2;
     """)
 
+    @MinRustcVersion("1.56.0-nightly")
+    @MockEdition(Edition.EDITION_2021)
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    fun `test 2021 edition prelude`() = checkByText("""
+        fn main() {
+            char::try_from(0u32);
+        }
+    """, false)
+
+    @WithExperimentalFeatures(EVALUATE_BUILD_SCRIPTS, PROC_MACROS)
+    fun `test no unresolved reference for built-in attributes`() = checkByText("""
+        #[!forbid()]
+
+        #[allow(foo)]
+        #[rustfmt::skip]
+        #[clippy::foo]
+        #[doc = "docs"]
+        #[cfg_attr(all(unix, unix), allow(foo::bar))]
+        fn foo() { }
+
+        #[derive(Clone, Copy)]
+        struct S;
+    """, false)
+
+    @WithExperimentalFeatures(EVALUATE_BUILD_SCRIPTS, PROC_MACROS)
+    @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
+    fun `test attribute macro`() = checkByFileTree("""
+    //- dep-proc-macro/lib.rs
+        use proc_macro::TokenStream;
+
+        #[proc_macro_attribute]
+        pub fn foobar(attr: TokenStream, item: TokenStream) -> TokenStream {
+            item
+        }
+    //- main.rs
+        use dep_proc_macro::foobar;/*caret*/
+
+        #[dep_proc_macro::foobar]
+        fn foo() { }
+
+        #[foobar]
+        fn bar() { }
+
+        #[dep_proc_macro::<error descr="Unresolved reference: `unresolved`">unresolved</error>]
+        fn baz() { }
+
+        #[<error descr="Unresolved reference: `unresolved`">unresolved</error>]
+        fn qux() { }
+    """, false)
+
+    @MockAdditionalCfgOptions("intellij_rust")
+    fun `test no errors in cfg-disabled file`() = checkByFileTree("""
+    //- main.rs
+        #[cfg(not(intellij_rust))]
+        mod foo;
+        #[cfg(not(intellij_rust))]
+        struct MyStruct;
+    //- foo.rs
+        use crate::MyStruct;
+        macro_rules! foo {() => {};}
+        foo!();/*caret*/
+        fn foo(a: MyStruct) {}
+    """, false)
+
+    @MockAdditionalCfgOptions("intellij_rust")
+    fun `test there are errors in a file that both cfg-enabled and cfg-disabled`() = checkByFileTree("""
+    //- main.rs
+        #[cfg(not(intellij_rust))]
+        mod foo;
+        #[cfg(intellij_rust)]
+        mod foo;
+    //- foo.rs
+        use crate::<error descr="Unresolved reference: `MyStruct`">MyStruct</error>;
+        fn foo(a: <error descr="Unresolved reference: `MyStruct`">MyStruct</error>) {}/*caret*/
+    """, false)
+
+    fun `test no unresolved reference if path qualifier is multiresolved`() = checkByText("""
+        mod foo {
+            fn foo() {}
+        }
+        mod foo {
+            fn bar() {}
+        }
+        fn main () {
+            foo::bar();
+        }
+    """, false)
+
+    @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
+    fun `test no errors in cfg-test mod when there are cyclic dev-dependencies in the package`() = checkByFileTree("""
+    //- cyclic-dep-lib-dev-dep/lib.rs
+        pub fn foo() {}
+    //- dep-lib-with-cyclic-dep/lib.rs
+        #[cfg(test)]
+        mod tests {
+            use cyclic_dep_lib_dev_dep::foo;/*caret*/
+            use cyclic_dep_lib_dev_dep::bar;
+        }
+    """, false)
+
+    @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
+    fun `test no errors in test fn when there are cyclic dev-dependencies in the package`() = checkByFileTree("""
+    //- cyclic-dep-lib-dev-dep/lib.rs
+        pub fn foo() {}
+    //- dep-lib-with-cyclic-dep/lib.rs
+        #[test]
+        fn test() {
+            use cyclic_dep_lib_dev_dep::foo;/*caret*/
+            use cyclic_dep_lib_dev_dep::bar;
+        }
+    """, false)
+
+    @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
+    fun `test there are in cfg-test mod when there aren't cyclic dev-dependencies in the package`() = checkByFileTree("""
+    //- trans-lib/lib.rs
+        pub fn foo() {}
+    //- dep-lib/lib.rs
+        #[cfg(test)]
+        mod tests {
+            use trans_lib::foo;/*caret*/
+            use trans_lib::<error descr="Unresolved reference: `bar`">bar</error>;
+        }
+    """, false)
+
+    // https://github.com/intellij-rust/intellij-rust/issues/8962
+    fun `test no unresolved reference for explicit type-qualified associated member path`() = checkByText("""
+        struct S;
+        mod module {
+            pub trait Trait { fn convert(self); }
+            impl Trait for super::S { fn convert(self) {} }
+        }
+        fn main() {
+            <S as module::Trait>::convert(S);
+        }
+    """)
+
     private fun checkByText(@Language("Rust") text: String, ignoreWithoutQuickFix: Boolean) {
+        withIgnoreWithoutQuickFix(ignoreWithoutQuickFix) { checkByText(text) }
+    }
+
+    private fun checkByFileTree(@Language("Rust") text: String, ignoreWithoutQuickFix: Boolean) {
+        withIgnoreWithoutQuickFix(ignoreWithoutQuickFix) { checkByFileTree(text) }
+    }
+
+    private fun withIgnoreWithoutQuickFix(ignoreWithoutQuickFix: Boolean, check: () -> Unit) {
         val inspection = inspection as RsUnresolvedReferenceInspection
         val defaultValue = inspection.ignoreWithoutQuickFix
         try {
             inspection.ignoreWithoutQuickFix = ignoreWithoutQuickFix
-            checkByText(text)
+            check()
         } finally {
             inspection.ignoreWithoutQuickFix = defaultValue
         }

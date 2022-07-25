@@ -81,10 +81,14 @@ class RsLivenessInspection : RsLintInspection() {
         if (isSimplePat) {
             when (kind) {
                 Parameter -> fixes.add(RemoveParameterFix(binding, name))
-                Variable -> fixes.add(RemoveVariableFix(binding, name))
+                Variable -> {
+                    if (binding.topLevelPattern.parent is RsLetDecl) {
+                        fixes.add(RemoveVariableFix(binding, name))
+                    }
+                }
             }
         }
 
-        holder.registerLintProblem(binding, message, *fixes.toTypedArray())
+        holder.registerLintProblem(binding, message, RsLintHighlightingType.UNUSED_SYMBOL, fixes)
     }
 }

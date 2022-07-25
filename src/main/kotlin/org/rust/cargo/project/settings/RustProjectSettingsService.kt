@@ -6,7 +6,6 @@
 package org.rust.cargo.project.settings
 
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.components.ServiceManager
 import com.intellij.openapi.project.Project
 import com.intellij.util.ThreeState
 import com.intellij.util.io.systemIndependentPath
@@ -17,8 +16,7 @@ import org.rust.cargo.toolchain.ExternalLinter
 import org.rust.cargo.toolchain.RsToolchain
 import org.rust.cargo.toolchain.RsToolchainBase
 import org.rust.cargo.toolchain.RsToolchainProvider
-import org.rust.ide.experiments.RsExperiments
-import org.rust.openapiext.isFeatureEnabled
+import org.rust.openapiext.isUnitTestMode
 import java.nio.file.Paths
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
@@ -48,11 +46,10 @@ interface RustProjectSettingsService {
         var useOffline: Boolean = false,
         var macroExpansionEngine: MacroExpansionEngine = defaultMacroExpansionEngine,
         @AffectsHighlighting
-        var newResolveEnabled: Boolean = isFeatureEnabled(RsExperiments.RESOLVE_NEW_ENGINE)
-            && System.getenv("INTELLIJ_RUST_FORCE_USE_OLD_RESOLVE") == null,
-        @AffectsHighlighting
         var doctestInjectionEnabled: Boolean = true,
+        // BACKCOMPAT: 2022.1
         var useRustfmt: Boolean = false,
+        // BACKCOMPAT: 2022.1
         var runRustfmtOnSave: Boolean = false,
     ) {
         @get:Transient
@@ -71,7 +68,9 @@ interface RustProjectSettingsService {
     }
 
     enum class MacroExpansionEngine {
-        DISABLED, OLD, NEW
+        DISABLED,
+        OLD, // `OLD` can't be selected by a user anymore, it exists for backcompat with saved user settings
+        NEW
     }
 
     @Retention(AnnotationRetention.RUNTIME)
@@ -108,10 +107,7 @@ interface RustProjectSettingsService {
     val compileAllTargets: Boolean
     val useOffline: Boolean
     val macroExpansionEngine: MacroExpansionEngine
-    val newResolveEnabled: Boolean
     val doctestInjectionEnabled: Boolean
-    val useRustfmt: Boolean
-    val runRustfmtOnSave: Boolean
 
     @Suppress("DEPRECATION")
     @Deprecated("Use toolchain property")
@@ -123,17 +119,14 @@ interface RustProjectSettingsService {
     fun configureToolchain()
 
     companion object {
-        val RUST_SETTINGS_TOPIC: Topic<RustSettingsListener> = Topic(
+        val RUST_SETTINGS_TOPIC: Topic<RustSettingsListener> = Topic.create(
             "rust settings changes",
-            RustSettingsListener::class.java
+            RustSettingsListener::class.java,
+            Topic.BroadcastDirection.TO_PARENT
         )
 
         private val defaultMacroExpansionEngine: MacroExpansionEngine
-            get() = if (isFeatureEnabled(RsExperiments.MACROS_NEW_ENGINE)) {
-                MacroExpansionEngine.NEW
-            } else {
-                MacroExpansionEngine.OLD
-            }
+            get() = MacroExpansionEngine.NEW
     }
 
     interface RustSettingsListener {
@@ -161,7 +154,15 @@ interface RustProjectSettingsService {
 }
 
 val Project.rustSettings: RustProjectSettingsService
-    get() = ServiceManager.getService(this, RustProjectSettingsService::class.java)
+    get() = getService(RustProjectSettingsService::class.java)
         ?: error("Failed to get RustProjectSettingsService for $this")
 
-val Project.toolchain: RsToolchainBase? get() = rustSettings.toolchain
+val Project.toolchain: RsToolchainBase?
+    get() {
+        val toolchain = rustSettings.toolchain
+        return when {
+            toolchain != null -> toolchain
+            isUnitTestMode -> RsToolchainBase.suggest()
+            else -> null
+        }
+    }

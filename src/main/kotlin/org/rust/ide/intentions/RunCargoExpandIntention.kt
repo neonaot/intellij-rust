@@ -14,6 +14,7 @@ import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.toolchain.tools.Cargo.Companion.checkNeedInstallCargoExpand
 import org.rust.lang.core.psi.ext.*
+import org.rust.openapiext.isUnderDarkTheme
 import org.rust.stdext.buildList
 
 class RunCargoExpandIntention : RsElementBaseIntentionAction<RunCargoExpandIntention.Context>(), LowPriorityAction {
@@ -40,9 +41,10 @@ class RunCargoExpandIntention : RsElementBaseIntentionAction<RunCargoExpandInten
         val (cargoProject, cargoTarget, crateRelativePath) = ctx
         if (checkNeedInstallCargoExpand(cargoProject.project)) return
 
+        val theme = if (isUnderDarkTheme) "Dracula" else "GitHub"
         val additionalArguments = buildList<String> {
             add("--color=always")
-            add("--theme=GitHub")
+            add("--theme=$theme")
             add("--tests")
             if (crateRelativePath.isNotEmpty()) {
                 add(crateRelativePath.removePrefix(PATH_SEPARATOR))

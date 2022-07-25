@@ -7,81 +7,34 @@ package org.rust.cargo.project.configurable
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogPanel
-import com.intellij.ui.EnumComboBoxModel
-import com.intellij.ui.layout.CCFlags
-import com.intellij.ui.layout.panel
-import com.intellij.ui.layout.toBinding
-import org.rust.cargo.project.model.cargoProjects
-import org.rust.cargo.toolchain.ExternalLinter
-import org.rust.cargo.util.CargoCommandCompletionProvider
-import org.rust.cargo.util.RsCommandLineEditor
+import com.intellij.ui.dsl.builder.bindSelected
+import com.intellij.ui.dsl.builder.panel
+import org.rust.RsBundle
+import org.rust.cargo.project.model.isNewProjectModelImportEnabled
 
-class CargoConfigurable(project: Project) : RsConfigurableBase(project, "Cargo") {
-
-    private lateinit var externalLinterArguments: RsCommandLineEditor
-
-    override fun createPanel(): DialogPanel {
-        externalLinterArguments = RsCommandLineEditor(
-            project,
-            CargoCommandCompletionProvider(project.cargoProjects, "check ") { null }
-        )
-        return panel {
+class CargoConfigurable(project: Project) : RsConfigurableBase(project, RsBundle.message("settings.rust.cargo.name")) {
+    override fun createPanel(): DialogPanel = panel {
+        row {
+            checkBox(RsBundle.message("settings.rust.cargo.show.first.error.label"))
+                .bindSelected(state::autoShowErrorsInEditor)
+        }
+        // Project model updates is controlled with `Preferences | Build, Execution, Deployment | Build Tools` settings
+        // in case of new approach
+        if (!isNewProjectModelImportEnabled) {
             row {
-                checkBox(
-                    "Automatically show first error in editor after a build failure",
-                    state::autoShowErrorsInEditor
-                )
+                checkBox(RsBundle.message("settings.rust.cargo.auto.update.project.label"))
+                    .bindSelected(state::autoUpdateEnabled)
             }
-            row {
-                checkBox(
-                    "Update project automatically if Cargo.toml changes",
-                    state::autoUpdateEnabled
-                )
-            }
-            row {
-                checkBox(
-                    "Compile all project targets if possible",
-                    state::compileAllTargets,
-                    comment = "Pass <b>--target-all</b> option to Сargo <b>build</b>/<b>check</b> command"
-                )
-            }
-            row {
-                checkBox(
-                    "Offline mode",
-                    state::useOffline,
-                    comment = "Pass <b>--offline</b> option to Cargo not to perform network requests"
-                )
-            }
-
-            titledRow("External Linter") {
-                subRowIndent = 0
-                row("External tool:") {
-                    comboBox(
-                        EnumComboBoxModel(ExternalLinter::class.java),
-                        state::externalLinter,
-                    ).comment("External tool to use for code analysis")
-                }
-
-                row("Additional arguments:") {
-                    externalLinterArguments(CCFlags.growX)
-                        .comment("Additional arguments to pass to <b>cargo check</b> or <b>cargo clippy</b> command")
-                        .withBinding(
-                            componentGet = { it.text },
-                            componentSet = { component, value -> component.text = value },
-                            modelBinding = state::externalLinterArguments.toBinding()
-                        )
-                }
-                row {
-                    checkBox(
-                        "Run external linter to analyze code on the fly",
-                        state::runExternalLinterOnTheFly,
-                        comment = """
-                            Enable external linter to add code highlighting based on the used linter result.
-                            Can be CPU-consuming
-                        """.trimIndent()
-                    )
-                }
-            }
+        }
+        row {
+            checkBox(RsBundle.message("settings.rust.cargo.compile.all.targets.label"))
+                .comment(RsBundle.message("settings.rust.cargo.compile.all.targets.comment"))
+                .bindSelected(state::compileAllTargets)
+        }
+        row {
+            checkBox(RsBundle.message("settings.rust.cargo.offline.mode.label"),)
+                .comment(RsBundle.message("settings.rust.cargo.offline.mode.comment"))
+                .bindSelected(state::useOffline)
         }
     }
 }

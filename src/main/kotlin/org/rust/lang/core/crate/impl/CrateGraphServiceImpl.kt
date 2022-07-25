@@ -12,7 +12,6 @@ import com.intellij.openapi.util.SimpleModificationTracker
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileWithId
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.util.containers.addIfNotNull
 import gnu.trove.TIntObjectHashMap
@@ -28,6 +27,7 @@ import org.rust.lang.core.crate.CrateGraphService
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.openapiext.CachedValueDelegate
 import org.rust.openapiext.checkReadAccessAllowed
+import org.rust.openapiext.isUnitTestMode
 import org.rust.stdext.applyWithSymlink
 import org.rust.stdext.enumSetOf
 import org.rust.stdext.exhaustive
@@ -44,7 +44,7 @@ class CrateGraphServiceImpl(val project: Project) : CrateGraphService {
     }
 
     private val crateGraph: CrateGraph by CachedValueDelegate {
-        val result = buildCrateGraph(project, project.cargoProjects.allProjects)
+        val result = buildCrateGraph(project.cargoProjects.allProjects)
         CachedValueProvider.Result(result, cargoProjectsModTracker, VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS)
     }
 
@@ -73,8 +73,8 @@ private data class CrateGraph(
 
 private val LOG: Logger = logger<CrateGraphServiceImpl>()
 
-private fun buildCrateGraph(project: Project, cargoProjects: Collection<CargoProject>): CrateGraph {
-    val builder = CrateGraphBuilder(project)
+private fun buildCrateGraph(cargoProjects: Collection<CargoProject>): CrateGraph {
+    val builder = CrateGraphBuilder()
     for (cargoProject in cargoProjects) {
         val workspace = cargoProject.workspace ?: continue
         for (pkg in workspace.packages) {
@@ -89,7 +89,7 @@ private fun buildCrateGraph(project: Project, cargoProjects: Collection<CargoPro
     return builder.build()
 }
 
-private class CrateGraphBuilder(val project: Project) {
+private class CrateGraphBuilder {
     private val states = hashMapOf<Path, NodeState>()
     private val topSortedCrates = mutableListOf<CargoBasedCrate>()
 
@@ -288,7 +288,7 @@ private class CrateGraphBuilder(val project: Project) {
                 lowerPackage(ProjectPackage(pkg.project, dep.pkg))?.let { Crate.Dependency(dep.name, it) }
             } catch (ignored: CyclicGraphException) {
                 // This can occur because `dev-dependencies` can cyclic depends on this package
-                CrateGraphTestmarks.cyclicDevDependency.hit()
+                CrateGraphTestmarks.CyclicDevDependency.hit()
                 cyclic += dep
                 null
             }

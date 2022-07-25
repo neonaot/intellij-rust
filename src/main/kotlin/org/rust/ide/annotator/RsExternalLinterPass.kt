@@ -14,6 +14,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
@@ -25,24 +26,26 @@ import com.intellij.openapi.progress.util.BackgroundTaskUtil
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiFile
 import com.intellij.util.ui.update.MergingUpdateQueue
 import com.intellij.util.ui.update.Update
 import org.rust.cargo.project.settings.rustSettings
 import org.rust.cargo.project.settings.toolchain
 import org.rust.cargo.project.workspace.PackageOrigin
+import org.rust.cargo.toolchain.impl.Applicability
 import org.rust.cargo.toolchain.tools.CargoCheckArgs
+import org.rust.ide.notifications.RsExternalLinterSlowRunNotifier
 import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.ext.containingCargoTarget
+import org.rust.openapiext.isUnitTestMode
 
 class RsExternalLinterPass(
     private val factory: RsExternalLinterPassFactory,
     private val file: PsiFile,
     private val editor: Editor
 ) : TextEditorHighlightingPass(file.project, editor.document), DumbAware {
-    @Suppress("UnstableApiUsage")
-    private val annotationHolder: AnnotationHolderImpl = AnnotationHolderImpl(AnnotationSession(file))
+    @Suppress("UnstableApiUsage", "DEPRECATION")
+    private val annotationHolder: AnnotationHolderImpl = AnnotationHolderImpl(AnnotationSession(file), false)
     @Volatile
     private var annotationInfo: Lazy<RsExternalLinterResult?>? = null
     private val annotationResult: RsExternalLinterResult? get() = annotationInfo?.value
@@ -56,16 +59,15 @@ class RsExternalLinterPass(
         val cargoTarget = file.containingCargoTarget ?: return
         if (cargoTarget.pkg.origin != PackageOrigin.WORKSPACE) return
 
-        val project = file.project
-        val args = CargoCheckArgs.forTarget(project, cargoTarget)
 
-        val moduleOrProject: Disposable = ModuleUtil.findModuleForFile(file) ?: project
-        disposable = project.messageBus.createDisposableOnAnyPsiChange()
+        val moduleOrProject: Disposable = ModuleUtil.findModuleForFile(file) ?: myProject
+        disposable = myProject.messageBus.createDisposableOnAnyPsiChange()
             .also { Disposer.register(moduleOrProject, it) }
 
+        val args = CargoCheckArgs.forTarget(myProject, cargoTarget)
         annotationInfo = RsExternalLinterUtils.checkLazily(
-            project.toolchain ?: return,
-            project,
+            myProject.toolchain ?: return,
+            myProject,
             disposable,
             cargoTarget.pkg.workspace.contentRoot,
             args
@@ -81,7 +83,9 @@ class RsExternalLinterPass(
             return
         }
 
-        val update = object : Update(file) {
+        class RsUpdate: Update(file) {
+            val updateFile: RsFile = file
+
             override fun setRejected() {
                 super.setRejected()
                 doFinish(highlights)
@@ -90,6 +94,7 @@ class RsExternalLinterPass(
             override fun run() {
                 BackgroundTaskUtil.runUnderDisposeAwareIndicator(disposable, Runnable {
                     val annotationResult = annotationResult ?: return@Runnable
+                    myProject.service<RsExternalLinterSlowRunNotifier>().reportDuration(annotationResult.executionTime)
                     runReadAction {
                         ProgressManager.checkCanceled()
                         doApply(annotationResult)
@@ -99,9 +104,10 @@ class RsExternalLinterPass(
                 })
             }
 
-            override fun canEat(update: Update?): Boolean = true
+            override fun canEat(update: Update?): Boolean = updateFile == (update as? RsUpdate)?.updateFile
         }
 
+        val update = RsUpdate()
         if (isUnitTestMode) {
             update.run()
         } else {
@@ -114,7 +120,7 @@ class RsExternalLinterPass(
         try {
             @Suppress("UnstableApiUsage")
             annotationHolder.runAnnotatorWithContext(file) { _, holder ->
-                holder.createAnnotationsForFile(file, annotationResult)
+                holder.createAnnotationsForFile(file, annotationResult, Applicability.UNSPECIFIED)
             }
         } catch (t: Throwable) {
             if (t is ProcessCanceledException) throw t
@@ -142,7 +148,7 @@ class RsExternalLinterPass(
         get() = annotationHolder.map(HighlightInfo::fromAnnotation)
 
     private val isAnnotationPassEnabled: Boolean
-        get() = file.project.rustSettings.runExternalLinterOnTheFly
+        get() = myProject.rustSettings.runExternalLinterOnTheFly
 
     companion object {
         private val LOG: Logger = logger<RsExternalLinterPass>()

@@ -35,8 +35,10 @@ class RsPostfixTemplateProvider : PostfixTemplateProvider {
         ParenPostfixTemplate(),
         LambdaPostfixTemplate(this),
         NotPostfixTemplate(this),
-        RefPostfixTemplate(this),
-        RefmPostfixTemplate(this),
+        RefExprPostfixTemplate(this),
+        RefmExprPostfixTemplate(this),
+        RefTypePostfixTemplate(this),
+        RefmTypePostfixTemplate(this),
         DerefPostfixTemplate(this),
         LetPostfixTemplate(this),
         IterPostfixTemplate("iter", this),
@@ -100,6 +102,6 @@ class LetPostfixTemplate(provider: RsPostfixTemplateProvider) :
     PostfixTemplateWithExpressionSelector(null, "let", "let name = expr;", RsExprParentsSelector(), provider) {
     override fun expandForChooseExpression(expression: PsiElement, editor: Editor) {
         if (expression !is RsExpr) return
-        extractExpression(editor, expression)
+        extractExpression(editor, expression, postfixLet = true)
     }
 }

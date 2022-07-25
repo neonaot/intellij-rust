@@ -5,8 +5,6 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.CommonBundle
-import com.intellij.execution.ExecutionException
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.Disposable
@@ -15,15 +13,13 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.progress.EmptyProgressIndicator
-import com.intellij.openapi.progress.PerformInBackgroundOption
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.progress.impl.BackgroundableProcessIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.Computable
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.openapi.wm.WindowManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.impl.AnyPsiChangeListener
 import com.intellij.psi.impl.PsiManagerImpl
@@ -34,24 +30,23 @@ import com.intellij.util.messages.MessageBus
 import org.apache.commons.lang.StringEscapeUtils
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.toolchain.RsToolchainBase
-import org.rust.cargo.toolchain.impl.CargoTopMessage
-import org.rust.cargo.toolchain.impl.ErrorCode
-import org.rust.cargo.toolchain.impl.RustcMessage
-import org.rust.cargo.toolchain.impl.RustcSpan
+import org.rust.cargo.toolchain.impl.*
 import org.rust.cargo.toolchain.tools.CargoCheckArgs
 import org.rust.cargo.toolchain.tools.cargoOrWrapper
 import org.rust.ide.annotator.RsExternalLinterFilteredMessage.Companion.filterMessage
 import org.rust.ide.annotator.RsExternalLinterUtils.TEST_MESSAGE
 import org.rust.ide.annotator.fixes.ApplySuggestionFix
+import org.rust.ide.status.RsExternalLinterWidget
 import org.rust.lang.RsConstants
 import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.ext.containingCargoPackage
+import org.rust.openapiext.*
 import org.rust.openapiext.JsonUtils.tryParseJsonObject
-import org.rust.openapiext.ProjectCache
-import org.rust.openapiext.checkReadAccessAllowed
-import org.rust.openapiext.checkReadAccessNotAllowed
-import org.rust.openapiext.saveAllDocumentsAsTheyAre
+import org.rust.stdext.unwrapOrElse
 import java.nio.file.Path
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.CompletableFuture
 
 object RsExternalLinterUtils {
     private val LOG: Logger = logger<RsExternalLinterUtils>()
@@ -104,26 +99,26 @@ object RsExternalLinterUtils {
         workingDirectory: Path,
         args: CargoCheckArgs
     ): RsExternalLinterResult? {
-        val indicator = WriteAction.computeAndWait<ProgressIndicator, Throwable> {
+        val widget = WriteAction.computeAndWait<RsExternalLinterWidget?, Throwable> {
             saveAllDocumentsAsTheyAre()
-            if (isUnitTestMode) {
-                EmptyProgressIndicator()
-            } else {
-                BackgroundableProcessIndicator(
-                    project,
-                    "Analyzing project with External Linter",
-                    PerformInBackgroundOption.ALWAYS_BACKGROUND,
-                    CommonBundle.getCancelButtonText(),
-                    @Suppress("DialogTitleCapitalization")
-                    CommonBundle.getCancelButtonText(),
-                    true
-                )
+            val statusBar = WindowManager.getInstance().getStatusBar(project)
+            statusBar?.getWidget(RsExternalLinterWidget.ID) as? RsExternalLinterWidget
+        }
+
+        val future = CompletableFuture<RsExternalLinterResult?>()
+        val task = object : Task.Backgroundable(project, "Analyzing project with ${args.linter.title}...", true) {
+
+            override fun run(indicator: ProgressIndicator) {
+                widget?.inProgress = true
+                future.complete(check(toolchain, project, owner, workingDirectory, args))
+            }
+
+            override fun onFinished() {
+                widget?.inProgress = false
             }
         }
-        return ProgressManager.getInstance().runProcess(
-            Computable { check(toolchain, project, owner, workingDirectory, args) },
-            indicator
-        )
+        ProgressManager.getInstance().runProcessWithProgressAsynchronously(task, EmptyProgressIndicator())
+        return future.get()
     }
 
     private fun check(
@@ -134,17 +129,18 @@ object RsExternalLinterUtils {
         args: CargoCheckArgs
     ): RsExternalLinterResult? {
         ProgressManager.checkCanceled()
-        val output = try {
-            toolchain
-                .cargoOrWrapper(workingDirectory)
-                .checkProject(project, owner, args)
-        } catch (e: ExecutionException) {
-            LOG.error(e)
-            return null
-        }
+        val started = Instant.now()
+        val output = toolchain
+            .cargoOrWrapper(workingDirectory)
+            .checkProject(project, owner, args)
+            .unwrapOrElse { e ->
+                LOG.error(e)
+                return null
+            }
+        val finish = Instant.now()
         ProgressManager.checkCanceled()
         if (output.isCancelled) return null
-        return RsExternalLinterResult(output.stdoutLines)
+        return RsExternalLinterResult(output.stdoutLines, Duration.between(started, finish).toMillis())
     }
 
     private data class Key(
@@ -165,14 +161,20 @@ fun MessageBus.createDisposableOnAnyPsiChange(): Disposable {
         PsiManagerImpl.ANY_PSI_CHANGE_TOPIC,
         object : AnyPsiChangeListener {
             override fun beforePsiChanged(isPhysical: Boolean) {
-                Disposer.dispose(disposable)
+                if (isPhysical) {
+                    Disposer.dispose(disposable)
+                }
             }
         }
     )
     return disposable
 }
 
-fun AnnotationHolder.createAnnotationsForFile(file: RsFile, annotationResult: RsExternalLinterResult) {
+fun AnnotationHolder.createAnnotationsForFile(
+    file: RsFile,
+    annotationResult: RsExternalLinterResult,
+    minApplicability: Applicability
+) {
     val cargoPackageOrigin = file.containingCargoPackage?.origin
     if (cargoPackageOrigin != PackageOrigin.WORKSPACE) return
 
@@ -193,13 +195,15 @@ fun AnnotationHolder.createAnnotationsForFile(file: RsFile, annotationResult: Rs
             .problemGroup { annotationMessage }
             .needsUpdateOnTyping(true)
 
-        message.quickFixes.forEach { f -> annotationBuilder.withFix(f) }
+        message.quickFixes
+            .singleOrNull { it.applicability <= minApplicability }
+            ?.let { f -> annotationBuilder.withFix(f) }
 
         annotationBuilder.create()
     }
 }
 
-class RsExternalLinterResult(commandOutput: List<String>) {
+class RsExternalLinterResult(commandOutput: List<String>, val executionTime: Long) {
     val messages: List<CargoTopMessage> = commandOutput.asSequence()
         .filter { MESSAGE_REGEX.matches(it) }
         .mapNotNull { tryParseJsonObject(it) }
@@ -287,7 +291,7 @@ private fun RustcMessage.collectQuickFixes(file: PsiFile, document: Document): L
     val quickFixes = mutableListOf<ApplySuggestionFix>()
 
     fun go(message: RustcMessage) {
-        val span = message.spans.firstOrNull { it.is_primary && it.isValid() }
+        val span = message.spans.singleOrNull { it.is_primary && it.isValid() }
         createQuickFix(file, document, span, message.message)?.let { quickFixes.add(it) }
         message.children.forEach(::go)
     }
@@ -301,7 +305,13 @@ private fun createQuickFix(file: PsiFile, document: Document, span: RustcSpan?, 
     val textRange = span.toTextRange(document) ?: return null
     val endElement = file.findElementAt(textRange.endOffset - 1) ?: return null
     val startElement = file.findElementAt(textRange.startOffset) ?: endElement
-    return ApplySuggestionFix(message, span.suggested_replacement, startElement, endElement)
+    return ApplySuggestionFix(
+        message,
+        span.suggested_replacement,
+        span.suggestion_applicability,
+        startElement,
+        endElement
+    )
 }
 
 private fun formatMessage(message: String): String {

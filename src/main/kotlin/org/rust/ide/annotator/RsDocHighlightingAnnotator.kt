@@ -5,17 +5,17 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.AnnotatorBase
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import org.rust.ide.colors.RsColor
 import org.rust.ide.injected.doctestInfo
 import org.rust.lang.core.psi.ext.ancestorStrict
 import org.rust.lang.core.psi.ext.descendantOfTypeStrict
 import org.rust.lang.core.psi.ext.elementType
+import org.rust.lang.core.psi.ext.isEnabledByCfg
 import org.rust.lang.doc.psi.*
+import org.rust.openapiext.isUnitTestMode
 
 class RsDocHighlightingAnnotator : AnnotatorBase() {
     override fun annotateInternal(element: PsiElement, holder: AnnotationHolder) {
@@ -43,6 +43,8 @@ class RsDocHighlightingAnnotator : AnnotatorBase() {
             element is RsDocLink && element.descendantOfTypeStrict<RsDocGap>() == null -> RsColor.DOC_LINK
             else -> null
         } ?: return
+
+        if (!element.isEnabledByCfg) return
 
         val severity = if (isUnitTestMode) color.testSeverity else HighlightSeverity.INFORMATION
 

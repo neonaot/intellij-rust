@@ -5,7 +5,6 @@
 
 package org.rust.lang.utils.evaluation
 
-import com.intellij.openapiext.Testmark
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.workspace.FeatureState
 import org.rust.cargo.project.workspace.PackageOrigin
@@ -14,6 +13,7 @@ import org.rust.lang.core.psi.ext.name
 import org.rust.lang.core.stubs.common.RsMetaItemPsiOrStub
 import org.rust.lang.core.stubs.index.RsCfgNotTestIndex
 import org.rust.lang.utils.evaluation.ThreeValuedLogic.*
+import org.rust.openapiext.Testmark
 
 // See https://doc.rust-lang.org/reference/conditional-compilation.html for more information
 
@@ -81,8 +81,8 @@ class CfgEvaluator(
         val result = evaluatePredicate(cfgPredicate)
 
         when (result) {
-            True -> CfgTestmarks.evaluatesTrue.hit()
-            False -> CfgTestmarks.evaluatesFalse.hit()
+            True -> CfgTestmarks.EvaluatesTrue.hit()
+            False -> CfgTestmarks.EvaluatesFalse.hit()
             Unknown -> Unit
         }
 
@@ -166,21 +166,28 @@ class CfgEvaluator(
                 PackageOrigin.STDLIB, PackageOrigin.STDLIB_DEPENDENCY -> False
 
                 PackageOrigin.DEPENDENCY -> ThreeValuedLogic.fromBoolean(
-                    crate.cargoTarget?.pkg?.let { !RsCfgNotTestIndex.hasCfgNotTest(crate.cargoProject.project, it) } ?: false
+                    crate.cargoTarget?.pkg?.let { !RsCfgNotTestIndex.hasCfgNotTest(crate.project, it) } ?: false
                 )
 
                 // TODO Provide cfg(test) switching for workspace packages
                 PackageOrigin.WORKSPACE -> Unknown
             }
 
-            return CfgEvaluator(
+            return forCrate(crate, crate.evaluateUnknownCfgToFalse, cfgTest)
+        }
+
+        fun forCrate(
+            crate: Crate,
+            evaluateUnknownCfgToFalse: Boolean,
+            cfgTestValue: ThreeValuedLogic
+        ): CfgEvaluator =
+            CfgEvaluator(
                 crate.cfgOptions,
                 crate.features,
                 crate.origin,
-                crate.evaluateUnknownCfgToFalse,
-                cfgTest
+                evaluateUnknownCfgToFalse,
+                cfgTestValue
             )
-        }
     }
 }
 
@@ -236,6 +243,6 @@ private sealed class CfgPredicate {
 }
 
 object CfgTestmarks {
-    val evaluatesTrue = Testmark("evaluatesTrue")
-    val evaluatesFalse = Testmark("evaluatesFalse")
+    object EvaluatesTrue : Testmark()
+    object EvaluatesFalse : Testmark()
 }

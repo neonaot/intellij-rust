@@ -8,6 +8,7 @@ package org.rust.ide.refactoring.inlineFunction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import com.intellij.openapi.util.Ref
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiReference
@@ -58,7 +59,8 @@ class RsInlineFunctionProcessor(
     }
 
     override fun preprocessUsages(refUsages: Ref<Array<UsageInfo>>): Boolean {
-        val conflicts = MultiMap<PsiElement, String>()
+        @Suppress("UnstableApiUsage")
+        val conflicts = MultiMap<PsiElement, @DialogMessage String>()
         refUsages.get().forEach { usage ->
             val caller = usage.element?.ancestors?.filter { it is RsCallExpr || it is RsDotExpr }?.firstOrNull()
             val exprAncestor = usage.element?.ancestorOrSelf<RsStmt>() ?: usage.element?.ancestorOrSelf<RsExpr>()
@@ -89,6 +91,8 @@ class RsInlineFunctionProcessor(
         return showConflicts(conflicts, refUsages.get())
     }
 
+    @Suppress("UnstableApiUsage")
+    @DialogMessage
     private fun checkCallerConflicts(function: RsFunction, caller: PsiElement): String? {
         val funcArguments = (function.copy() as RsFunction).valueParameters
         var callArguments = when (caller) {
@@ -149,9 +153,9 @@ class RsInlineFunctionProcessor(
 
         fun checkIfLoopCondition(fn: RsFunction, element: PsiElement): Boolean {
             val block = fn.block!!
-            val statements = block.stmtList
+            val (statements, tailExpr) = block.expandedStmtsAndTailExpr
 
-            val hasStatements = when (block.expr) {
+            val hasStatements = when (tailExpr) {
                 null -> statements.size > 1 ||
                     statements.size == 1 && statements[0].descendantsOfType<RsRetExpr>().isEmpty()
                 else -> statements.size > 0
@@ -425,7 +429,7 @@ class RsInlineFunctionProcessor(
     }
 
     private fun replaceLastExprToStatement(body: RsBlock) {
-        val expr = body.expr ?: return
+        val expr = body.expandedTailExpr ?: return
         val text = buildString {
             if (expr !is RsRetExpr) append("return ")
             append(expr.text)
@@ -433,10 +437,17 @@ class RsInlineFunctionProcessor(
         }
 
         val stmt = factory.createStatement(text)
-        expr.replace(stmt)
+        expr.parent.replace(stmt)
     }
 
     private fun PsiElement.addLeftSibling(element: PsiElement) {
         this.parent.addBefore(element, this)
     }
+
+    override fun getElementsToWrite(descriptor: UsageViewDescriptor): Collection<PsiElement> =
+        when {
+            inlineThisOnly -> listOfNotNull(ref?.element)
+            function.isWritable -> listOfNotNull(ref?.element, function)
+            else -> emptyList()
+        }
 }

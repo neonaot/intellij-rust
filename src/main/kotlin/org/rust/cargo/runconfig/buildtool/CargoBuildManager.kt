@@ -7,7 +7,6 @@ package org.rust.cargo.runconfig.buildtool
 
 import com.intellij.build.BuildContentManager
 import com.intellij.build.BuildViewManager
-import com.intellij.execution.ExecutionException
 import com.intellij.execution.ExecutorRegistry
 import com.intellij.execution.RunManager
 import com.intellij.execution.configuration.EnvironmentVariablesData
@@ -16,10 +15,11 @@ import com.intellij.execution.impl.RunManagerImpl
 import com.intellij.execution.impl.RunnerAndConfigurationSettingsImpl
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.runners.ProgramRunner
+import com.intellij.ide.nls.NlsMessages
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.TransactionGuard
 import com.intellij.openapi.application.invokeLater
-import com.intellij.openapi.components.ServiceManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
@@ -27,13 +27,8 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.util.text.StringUtil
-import com.intellij.openapi.wm.ToolWindowId
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapiext.isHeadlessEnvironment
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.ui.SystemNotifications
-import com.intellij.ui.content.MessageView
-import com.intellij.util.concurrency.FutureResult
 import com.intellij.util.execution.ParametersListUtil
 import com.intellij.util.text.SemVer
 import com.intellij.util.ui.UIUtil
@@ -44,39 +39,53 @@ import org.rust.cargo.runconfig.CargoRunState
 import org.rust.cargo.runconfig.RsCommandConfiguration
 import org.rust.cargo.runconfig.addFormatJsonOption
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.cargo.runconfig.command.ParsedCommand
+import org.rust.cargo.runconfig.command.hasRemoteTarget
+import org.rust.cargo.runconfig.target.localBuildArgsForRemoteRun
 import org.rust.cargo.runconfig.wasmpack.WasmPackBuildTaskProvider
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.util.CargoArgsParser.Companion.parseArgs
+import org.rust.cargo.util.parseSemVer
 import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.notifications.RsNotifications
 import org.rust.openapiext.isFeatureEnabled
+import org.rust.openapiext.isHeadlessEnvironment
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.saveAllDocuments
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Future
 
 object CargoBuildManager {
     private val BUILDABLE_COMMANDS: List<String> = listOf("run", "test")
 
     private val CANCELED_BUILD_RESULT: Future<CargoBuildResult> =
-        FutureResult(CargoBuildResult(succeeded = false, canceled = true, started = 0))
+        CompletableFuture.completedFuture(CargoBuildResult(succeeded = false, canceled = true, started = 0))
 
-    private val MIN_RUSTC_VERSION: SemVer = SemVer.parseFromText("1.48.0")!!
+    private val MIN_RUSTC_VERSION: SemVer = "1.48.0".parseSemVer()
 
     val RsCommandConfiguration.isBuildToolWindowEnabled: Boolean
         get() {
-            if (!project.isBuildToolWindowEnabled) return false
+            if (!project.isBuildToolWindowAvailable) return false
             return beforeRunTasks.any { task ->
                 task is CargoBuildTaskProvider.BuildTask ||
                     task is WasmPackBuildTaskProvider.BuildTask
             }
         }
 
-    val Project.isBuildToolWindowEnabled: Boolean
+    val Project.isBuildToolWindowAvailable: Boolean
         get() {
             if (!isFeatureEnabled(RsExperiments.BUILD_TOOL_WINDOW)) return false
             val minVersion = cargoProjects.allProjects
                 .mapNotNull { it.rustcInfo?.version?.semver }
                 .minOrNull() ?: return false
             return minVersion >= MIN_RUSTC_VERSION
+        }
+
+    val CargoCommandConfiguration.isBuildToolWindowAvailable: Boolean
+        get() {
+            if (!project.isBuildToolWindowAvailable) return false
+            return !hasRemoteTarget || buildTarget.isLocal
         }
 
     fun build(buildConfiguration: CargoBuildConfiguration): Future<CargoBuildResult> {
@@ -94,22 +103,24 @@ object CargoBuildManager {
         val cargoProject = state.cargoProject ?: return CANCELED_BUILD_RESULT
 
         // Make sure build tool window is initialized:
-        ServiceManager.getService(project, BuildContentManager::class.java)
+        @Suppress("UsePropertyAccessSyntax")
+        BuildContentManager.getInstance(project).getOrCreateToolWindow()
 
         if (isUnitTestMode) {
             lastBuildCommandLine = state.prepareCommandLine()
         }
 
-        return execute(
-            CargoBuildContext(
-                cargoProject = cargoProject,
-                environment = environment,
-                taskName = "Build",
-                progressTitle = "Building...",
-                isTestBuild = state.commandLine.command == "test"
-            )
-        ) {
-            val buildProgressListener = ServiceManager.getService(project, BuildViewManager::class.java)
+        val buildId = Any()
+        return execute(CargoBuildContext(
+            cargoProject = cargoProject,
+            environment = environment,
+            taskName = "Build",
+            progressTitle = "Building...",
+            isTestBuild = state.commandLine.command == "test",
+            buildId = buildId,
+            parentId = buildId
+        )) {
+            val buildProgressListener = project.service<BuildViewManager>()
             if (!isHeadlessEnvironment) {
                 @Suppress("UsePropertyAccessSyntax")
                 val buildToolWindow = BuildContentManager.getInstance(project).getOrCreateToolWindow()
@@ -128,7 +139,7 @@ object CargoBuildManager {
     private fun execute(
         context: CargoBuildContext,
         doExecute: CargoBuildContext.() -> Unit
-    ): FutureResult<CargoBuildResult> {
+    ): CompletableFuture<CargoBuildResult> {
         context.environment.notifyProcessStartScheduled()
         val processCreationLock = Any()
 
@@ -138,11 +149,11 @@ object CargoBuildManager {
             isHeadlessEnvironment ->
                 context.indicator = EmptyProgressIndicator()
             else -> {
-                val indicatorResult = FutureResult<ProgressIndicator>()
+                val indicatorResult = CompletableFuture<ProgressIndicator>()
                 UIUtil.invokeLaterIfNeeded {
                     object : Task.Backgroundable(context.project, context.taskName, true) {
                         override fun run(indicator: ProgressIndicator) {
-                            indicatorResult.set(indicator)
+                            indicatorResult.complete(indicator)
 
                             var wasCanceled = false
                             while (!context.result.isDone) {
@@ -166,7 +177,7 @@ object CargoBuildManager {
                 try {
                     context.indicator = indicatorResult.get()
                 } catch (e: ExecutionException) {
-                    context.result.setException(e)
+                    context.result.completeExceptionally(e)
                     return context.result
                 }
             }
@@ -194,7 +205,6 @@ object CargoBuildManager {
                         return@Runnable
                     }
 
-                    MessageView.SERVICE.getInstance(context.project) // register ToolWindowId.MESSAGES_WINDOW
                     saveAllDocuments()
                     context.doExecute()
                 }
@@ -205,12 +215,11 @@ object CargoBuildManager {
     }
 
     fun isBuildConfiguration(configuration: CargoCommandConfiguration): Boolean {
-        val args = ParametersListUtil.parse(configuration.command)
-        return when (val command = args.firstOrNull()) {
+        val parsed = ParsedCommand.parse(configuration.command) ?: return false
+        return when (val command = parsed.command) {
             "build", "check", "clippy" -> true
             "test" -> {
-                val additionalArguments = args.drop(1)
-                val (commandArguments, _) = parseArgs(command, additionalArguments)
+                val (commandArguments, _) = parseArgs(command, parsed.additionalArguments)
                 "--no-run" in commandArguments
             }
             else -> false
@@ -220,24 +229,29 @@ object CargoBuildManager {
     fun getBuildConfiguration(configuration: CargoCommandConfiguration): CargoCommandConfiguration? {
         if (isBuildConfiguration(configuration)) return configuration
 
-        val args = ParametersListUtil.parse(configuration.command)
-        val command = args.firstOrNull() ?: return null
-        if (command !in BUILDABLE_COMMANDS) return null
-        val additionalArguments = args.drop(1)
-        val (commandArguments, _) = parseArgs(command, additionalArguments)
+        val parsed = ParsedCommand.parse(configuration.command) ?: return null
+        if (parsed.command !in BUILDABLE_COMMANDS) return null
+        val commandArguments = parseArgs(parsed.command, parsed.additionalArguments).commandArguments.toMutableList()
+        commandArguments.addAll(configuration.localBuildArgsForRemoteRun)
 
         // https://github.com/intellij-rust/intellij-rust/issues/3707
-        if (command == "test" && commandArguments.contains("--doc")) return null
+        if (parsed.command == "test" && commandArguments.contains("--doc")) return null
 
         val buildConfiguration = configuration.clone() as CargoCommandConfiguration
         buildConfiguration.name = "Build `${buildConfiguration.name}`"
-        buildConfiguration.command = when (command) {
-            "run" -> ParametersListUtil.join("build", *commandArguments.toTypedArray())
-            "test" -> ParametersListUtil.join("test", "--no-run", *commandArguments.toTypedArray())
+        buildConfiguration.command = ParametersListUtil.join(when (parsed.command) {
+            "run" -> listOfNotNull(parsed.toolchain, "build", *commandArguments.toTypedArray())
+            "test" -> listOfNotNull(parsed.toolchain, "test", "--no-run", *commandArguments.toTypedArray())
             else -> return null
-        }
-        // building does not require root privileges anyway
+        })
+
+        buildConfiguration.emulateTerminal = false
+        // building does not require root privileges and redirect input anyway
         buildConfiguration.withSudo = false
+        buildConfiguration.isRedirectInput = false
+
+        buildConfiguration.defaultTargetName = buildConfiguration.defaultTargetName
+            .takeIf { buildConfiguration.buildTarget.isRemote }
 
         return buildConfiguration
     }
@@ -270,10 +284,9 @@ object CargoBuildManager {
         notification.notify(project)
 
         if (messageType === MessageType.ERROR) {
-            MessageView.SERVICE.getInstance(project) // register ToolWindowId.MESSAGES_WINDOW
             val manager = ToolWindowManager.getInstance(project)
             invokeLater {
-                manager.notifyByBalloon(ToolWindowId.MESSAGES_WINDOW, messageType, notificationContent)
+                manager.notifyByBalloon(BuildContentManager.TOOL_WINDOW_ID, messageType, notificationContent)
             }
         }
 
@@ -286,7 +299,7 @@ object CargoBuildManager {
 
     private fun buildNotificationMessage(message: String, details: String?, time: Long): String {
         var notificationContent = message + if (details == null) "" else " with $details"
-        if (time > 0) notificationContent += " in " + StringUtil.formatDuration(time, " ")
+        if (time > 0) notificationContent += " in " + NlsMessages.formatDuration(time)
         return notificationContent
     }
 

@@ -11,7 +11,7 @@ import com.intellij.openapi.fileTypes.LanguageFileType
 import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import com.intellij.psi.PsiCodeFragment
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
@@ -28,8 +28,10 @@ import org.rust.ide.refactoring.isValidRustVariableIdentifier
 import org.rust.ide.utils.import.createVirtualImportContext
 import org.rust.lang.RsFileType
 import org.rust.lang.core.psi.*
-import org.rust.lang.core.psi.ext.*
+import org.rust.lang.core.psi.ext.RsItemsOwner
+import org.rust.lang.core.psi.ext.RsMod
 import org.rust.openapiext.document
+import org.rust.openapiext.isUnitTestMode
 import java.awt.BorderLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -65,7 +67,7 @@ fun withMockChangeFunctionSignature(mock: ChangeFunctionSignatureMock, action: (
     }
 }
 
-private class SignatureParameter(val factory: RsPsiFactory, val parameter: Parameter) : ParameterInfo {
+private class SignatureParameter(val parameter: Parameter) : ParameterInfo {
     override fun getName(): String = parameter.patText
     override fun getOldIndex(): Int = parameter.index
     override fun getDefaultValue(): String = parameter.defaultValue.text
@@ -88,10 +90,7 @@ private class SignatureDescriptor(
 
     override fun getName(): String = config.name
 
-    override fun getParameters(): List<SignatureParameter> {
-        val factory = RsPsiFactory(config.function.project)
-        return config.parameters.map { SignatureParameter(factory, it) }
-    }
+    override fun getParameters(): List<SignatureParameter> = config.parameters.map { SignatureParameter(it) }
 
     override fun getParametersCount(): Int = config.parameters.size
     override fun getMethod(): PsiElement = config.function
@@ -143,7 +142,7 @@ private class TableModel(
         val parameter = if (parameterInfo == null) {
             val newParameter = createNewParameter(descriptor)
             descriptor.config.parameters.add(newParameter)
-            SignatureParameter(factory, newParameter)
+            SignatureParameter(newParameter)
         } else parameterInfo
 
         return ModelItem(importContext, parameter)
@@ -282,7 +281,7 @@ private class ChangeSignatureDialog(project: Project, descriptor: SignatureDescr
     override fun createCallerChooser(
         title: String?,
         treeToReuse: Tree?,
-        callback: Consumer<MutableSet<RsFunction>>?
+        callback: CallerChooserCallback?
     ): CallerChooserBase<RsFunction>? = null
 
     override fun validateAndCommitData(): String? {
@@ -319,6 +318,8 @@ private class ChangeSignatureDialog(project: Project, descriptor: SignatureDescr
         isValid = validateAndUpdateData() == null
     }
 
+    @Suppress("UnstableApiUsage")
+    @DialogMessage
     private fun validateAndUpdateData(): String? {
         val factory = RsPsiFactory(config.function.project)
 

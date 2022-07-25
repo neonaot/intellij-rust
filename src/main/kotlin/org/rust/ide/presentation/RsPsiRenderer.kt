@@ -6,8 +6,8 @@
 package org.rust.ide.presentation
 
 import org.rust.ide.utils.import.ImportCandidate
-import org.rust.ide.utils.import.ImportCandidatesCollector
-import org.rust.ide.utils.import.ImportContext
+import org.rust.ide.utils.import.ImportCandidatesCollector2
+import org.rust.ide.utils.import.ImportContext2
 import org.rust.lang.core.parser.RustParserUtil
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
@@ -59,6 +59,9 @@ fun RsPsiRenderer.renderValueParameterList(list: RsValueParameterList): String =
 fun RsPsiRenderer.renderFunctionSignature(fn: RsFunction): String =
     buildString { appendFunctionSignature(this, fn) }
 
+fun RsPsiRenderer.renderTypeAliasSignature(ta: RsTypeAlias, renderBounds: Boolean): String =
+    buildString { appendTypeAliasSignature(this, ta, renderBounds) }
+
 data class PsiRenderingOptions(
     val renderLifetimes: Boolean = true,
     /** Related to [RsPsiRenderer.appendFunctionSignature] */
@@ -85,12 +88,13 @@ open class RsPsiRenderer(
         if (fn.isUnsafe) {
             sb.append("unsafe ")
         }
-        if (fn.isExtern) {
+        if (fn.isActuallyExtern) {
             sb.append("extern ")
             val abiName = fn.abiName
             if (abiName != null) {
+                sb.append("\"")
                 sb.append(abiName)
-                sb.append(" ")
+                sb.append("\" ")
             }
         }
         sb.append("fn ")
@@ -113,10 +117,24 @@ open class RsPsiRenderer(
         }
         val whereClause = fn.whereClause
         if (whereClause != null && renderGenericsAndWhere) {
-            sb.append(" where ")
-            whereClause.wherePredList.joinToWithBuffer(sb, separator = ", ") {
-                appendWherePred(sb, this)
-            }
+            appendWhereClause(sb, whereClause)
+        }
+    }
+
+    open fun appendTypeAliasSignature(sb: StringBuilder, ta: RsTypeAlias, renderBounds: Boolean) {
+        sb.append("type ")
+        sb.append(ta.escapedName ?: "")
+        val typeParameterList = ta.typeParameterList
+        if (typeParameterList != null && renderGenericsAndWhere) {
+            appendTypeParameterList(sb, typeParameterList)
+        }
+        val whereClause = ta.whereClause
+        if (whereClause != null && renderGenericsAndWhere) {
+            appendWhereClause(sb, whereClause)
+        }
+        val typeParamBounds = ta.typeParamBounds
+        if (typeParamBounds != null && renderBounds) {
+            appendTypeParamBounds(sb, typeParamBounds)
         }
     }
 
@@ -137,11 +155,22 @@ open class RsPsiRenderer(
             appendTypeReference(sb, type)
             val typeParamBounds = pred.typeParamBounds
             if (typeParamBounds != null) {
-                sb.append(": ")
-                typeParamBounds.polyboundList.joinToWithBuffer(sb, " + ") {
-                    appendPolybound(sb, this)
-                }
+                appendTypeParamBounds(sb, typeParamBounds)
             }
+        }
+    }
+
+    private fun appendWhereClause(sb: StringBuilder, whereClause: RsWhereClause) {
+        sb.append(" where ")
+        whereClause.wherePredList.joinToWithBuffer(sb, separator = ", ") {
+            appendWherePred(sb, this)
+        }
+    }
+
+    private fun appendTypeParamBounds(sb: StringBuilder, bounds: RsTypeParamBounds) {
+        sb.append(": ")
+        bounds.polyboundList.joinToWithBuffer(sb, " + ") {
+            appendPolybound(sb, this)
         }
     }
 
@@ -176,6 +205,7 @@ open class RsPsiRenderer(
                     sb.append(name ?: "_")
                     val type = typeReference
                     if (type != null) {
+                        sb.append(": ")
                         appendTypeReference(sb, type)
                     }
                 }
@@ -237,8 +267,14 @@ open class RsPsiRenderer(
         }
     }
 
-    open fun appendTypeReference(sb: StringBuilder, ref: RsTypeReference) {
-        when (val type = ref.skipParens()) {
+    open fun appendTypeReference(sb: StringBuilder, type: RsTypeReference) {
+        when (type) {
+            is RsParenType -> {
+                sb.append("(")
+                type.typeReference?.let { appendTypeReference(sb, it) }
+                sb.append(")")
+            }
+
             is RsTupleType -> {
                 val types = type.typeReferenceList
                 if (types.size == 1) {
@@ -295,8 +331,9 @@ open class RsPsiRenderer(
                     sb.append("extern ")
                     val abiName = type.abiName
                     if (abiName != null) {
+                        sb.append("\"")
                         sb.append(abiName)
-                        sb.append(" ")
+                        sb.append("\" ")
                     }
                 }
                 sb.append("fn")
@@ -314,10 +351,7 @@ open class RsPsiRenderer(
             is RsMacroType -> {
                 appendPath(sb, type.macroCall.path)
                 sb.append("!(")
-                val macroBody = type.macroCall.macroBody
-                if (macroBody != null) {
-                    sb.append(macroBody)
-                }
+                type.macroCall.macroBody?.let { sb.append(it) }
                 sb.append(")")
             }
         }
@@ -423,7 +457,7 @@ open class RsPsiRenderer(
                     }
                 }
                 assocTypeBindings.joinToWithBuffer(sb, ", ") { sb ->
-                    sb.append(referenceName)
+                    appendPath(sb, this.path)
                     sb.append("=")
                     typeReference?.let { appendTypeReference(sb, it) }
                 }
@@ -496,7 +530,8 @@ open class RsPsiRenderer(
         val isTry = expr.isTry
         val isUnsafe = expr.isUnsafe
         val isAsync = expr.isAsync
-        val tailExpr = expr.block.expr
+        val isConst = expr.isConst
+        val tailExpr = expr.block.expandedTailExpr
 
         if (isTry) {
             sb.append("try ")
@@ -506,6 +541,9 @@ open class RsPsiRenderer(
         }
         if (isAsync) {
             sb.append("async ")
+        }
+        if (isConst) {
+            sb.append("const ")
         }
 
         if (tailExpr == null) {
@@ -525,6 +563,8 @@ open class RsPsiRenderer(
             UnaryOperator.MINUS -> "-"
             UnaryOperator.NOT -> "!"
             UnaryOperator.BOX -> "box "
+            UnaryOperator.RAW_REF_CONST -> "&raw const "
+            UnaryOperator.RAW_REF_MUT -> "&raw mut "
         }
         sb.append(sign)
         val innerExpr = expr.expr
@@ -607,12 +647,15 @@ open class PsiSubstitutingPsiRenderer(
     override fun appendPathWithoutArgs(sb: StringBuilder, path: RsPath) {
         val replaced = when (val resolved = path.reference?.resolve()) {
             is RsTypeParameter -> when (val s = typeSubst(resolved)) {
-                is RsPsiSubstitution.TypeValue.Present.InAngles -> {
-                    super.appendTypeReference(sb, s.value)
-                    true
+                is RsPsiSubstitution.Value.Present -> when (s.value) {
+                    is RsPsiSubstitution.TypeValue.InAngles -> {
+                        super.appendTypeReference(sb, s.value.value)
+                        true
+                    }
+                    is RsPsiSubstitution.TypeValue.FnSugar -> false
                 }
-                is RsPsiSubstitution.TypeValue.DefaultValue -> {
-                    super.appendTypeReference(sb, s.value)
+                is RsPsiSubstitution.Value.DefaultValue -> {
+                    super.appendTypeReference(sb, s.value.value)
                     true
                 }
                 else -> false
@@ -623,6 +666,10 @@ open class PsiSubstitutingPsiRenderer(
                         is RsExpr -> appendConstExpr(sb, s.value)
                         is RsTypeReference -> appendTypeReference(sb, s.value)
                     }
+                    true
+                }
+                is RsPsiSubstitution.Value.DefaultValue -> {
+                    appendConstExpr(sb, s.value)
                     true
                 }
                 else -> false
@@ -647,14 +694,14 @@ open class PsiSubstitutingPsiRenderer(
         }
     }
 
-    private fun regionSubst(lifetime: RsLifetimeParameter?): RsPsiSubstitution.Value<RsLifetime>? {
-        return substitutions.mapNotNull { it.regionSubst[lifetime] }.firstOrNull()
+    private fun regionSubst(lifetime: RsLifetimeParameter?): RsPsiSubstitution.Value<RsLifetime, Nothing>? {
+        return substitutions.firstNotNullOfOrNull { it.regionSubst[lifetime] }
     }
-    private fun constSubst(const: RsConstParameter?): RsPsiSubstitution.Value<RsElement>? {
-        return substitutions.mapNotNull { it.constSubst[const] }.firstOrNull()
+    private fun constSubst(const: RsConstParameter?): RsPsiSubstitution.Value<RsElement, RsExpr>? {
+        return substitutions.firstNotNullOfOrNull { it.constSubst[const] }
     }
-    private fun typeSubst(type: RsTypeParameter?): RsPsiSubstitution.TypeValue? {
-        return substitutions.mapNotNull { it.typeSubst[type] }.firstOrNull()
+    private fun typeSubst(type: RsTypeParameter?): RsPsiSubstitution.Value<RsPsiSubstitution.TypeValue, RsPsiSubstitution.TypeDefault>? {
+        return substitutions.firstNotNullOfOrNull { it.typeSubst[type] }
     }
 }
 
@@ -664,7 +711,7 @@ class ImportingPsiRenderer(
     private val context: RsElement
 ) : PsiSubstitutingPsiRenderer(options, substitutions) {
 
-    private val importContext = ImportContext.from(context.project, context)
+    private val importContext = ImportContext2.from(context, ImportContext2.Type.OTHER)
 
     private val visibleNames: Pair<MutableMap<Pair<String, Namespace>, RsElement>, MutableMap<RsElement, String>> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val nameToElement = mutableMapOf<Pair<String, Namespace>, RsElement>()
@@ -690,6 +737,7 @@ class ImportingPsiRenderer(
     override fun appendPathWithoutArgs(sb: StringBuilder, path: RsPath) {
         val pathReferenceName = path.referenceName
         val tryImportPath1 = path.parent !is RsPath &&
+            path.parent !is RsAssocTypeBinding &&
             TyPrimitive.fromPath(path) == null &&
             path.basePath().referenceName != "Self" &&
             path.basePath().typeQual == null
@@ -704,8 +752,9 @@ class ImportingPsiRenderer(
                 if (visibleElementName != null) {
                     sb.append(visibleElementName)
                 } else {
-                    val importCandidate = ImportCandidatesCollector.getImportCandidates(importContext, resolved)
-                        .firstOrNull()
+                    val importCandidate = importContext?.let {
+                        ImportCandidatesCollector2.findImportCandidate(it, resolved)
+                    }
                     if (importCandidate == null) {
                         val resolvedCrate = resolved.containingCrate
                         if (resolvedCrate == null || resolvedCrate == context.containingCrate) {

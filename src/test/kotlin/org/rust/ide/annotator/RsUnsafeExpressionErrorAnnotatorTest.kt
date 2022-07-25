@@ -138,6 +138,7 @@ class RsUnsafeExpressionErrorAnnotatorTest : RsAnnotatorTestBase(RsUnsafeExpress
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test need unsafe asm macro call`() = checkErrors("""
+       use std::arch::asm; // required since 1.59
        fn main() {
             <error descr="use of `asm!()` is unsafe and requires unsafe function or block [E0133]">asm!("nop")</error>;
        }
@@ -145,6 +146,7 @@ class RsUnsafeExpressionErrorAnnotatorTest : RsAnnotatorTestBase(RsUnsafeExpress
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test need unsafe asm macro expr`() = checkErrors("""
+       use std::arch::asm; // required since 1.59
        fn main() {
             <error descr="use of `asm!()` is unsafe and requires unsafe function or block [E0133]">asm!("nop")</error>
        }
@@ -164,6 +166,29 @@ class RsUnsafeExpressionErrorAnnotatorTest : RsAnnotatorTestBase(RsUnsafeExpress
 
         fn main() {
             asm!();
+        }
+    """)
+
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    fun `test unsafe intrinsics`() = checkErrors("""
+        #![feature(core_intrinsics)]
+
+        use std::intrinsics::atomic_fence;
+
+        fn main() {
+            <error descr="Call to unsafe function requires unsafe function or block [E0133]">atomic_fence()</error>;
+        }
+    """)
+
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    fun `test safe intrinsics`() = checkErrors("""
+        #![feature(core_intrinsics)]
+
+        use std::intrinsics::{add_with_overflow, likely};
+
+        fn main() {
+            if likely(true) {}
+            let x = add_with_overflow(1, 2);
         }
     """)
 }

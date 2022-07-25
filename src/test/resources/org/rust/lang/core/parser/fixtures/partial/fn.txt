@@ -82,7 +82,7 @@ FILE
     RsBlockImpl(BLOCK)
       PsiElement({)('{')
       PsiWhiteSpace('\n    ')
-      PsiErrorElement:'#', <expr>, <item>, <macro call>, <macro> or <stmt> expected, got '+'
+      PsiErrorElement:'#', <item> or <statement> expected, got '+'
         PsiElement(+)('+')
       PsiWhiteSpace('\n')
       PsiElement(})('}')
@@ -105,7 +105,7 @@ FILE
     PsiElement(})('}')
   PsiWhiteSpace('\n\n')
   PsiElement(unsafe)('unsafe')
-  PsiErrorElement:extern, fn, impl or trait expected, got 'const'
+  PsiErrorElement:extern, fn, impl, mod or trait expected, got 'const'
     <empty list>
   PsiWhiteSpace(' ')
   RsFunctionImpl(FUNCTION)
@@ -128,9 +128,10 @@ FILE
     RsBlockImpl(BLOCK)
       PsiElement({)('{')
       PsiWhiteSpace(' ')
-      RsUnitExprImpl(UNIT_EXPR)
-        PsiElement(()('(')
-        PsiElement())(')')
+      RsExprStmtImpl(EXPR_STMT)
+        RsUnitExprImpl(UNIT_EXPR)
+          PsiElement(()('(')
+          PsiElement())(')')
       PsiWhiteSpace(' ')
       PsiElement(})('}')
   PsiWhiteSpace('\n\n')

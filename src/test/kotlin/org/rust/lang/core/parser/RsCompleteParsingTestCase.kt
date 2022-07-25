@@ -61,7 +61,7 @@ class RsCompleteParsingTestCase : RsParsingTestCaseBase("complete") {
     fun `test block try expr`() = doTest(true)
     fun `test block unary expr`() = doTest(true)
 
-    fun `test match call ambiguity`() = doTest(true)
+    fun `test match pattern ambiguity`() = doTest(true)
     fun `test visibility`() = doTest(true)
     fun `test polybounds`() = doTest(true)
     fun `test async await`() = doTest(true)
@@ -76,6 +76,9 @@ class RsCompleteParsingTestCase : RsParsingTestCaseBase("complete") {
 
     fun `test attrs in exprs`() = doTest(true)
     fun `test attrs in params`() = doTest(true)
+
+    // We check only that the parser does not hang here
+    fun `test way too many type quals`() = checkFileParsed()
 
     override fun checkResult(targetDataName: String, file: PsiFile) {
         super.checkResult(targetDataName, file)

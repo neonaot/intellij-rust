@@ -6,7 +6,6 @@
 package org.rust.lang.core.resolve
 
 import com.intellij.openapi.util.RecursionManager
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiElement
 import org.rust.cargo.util.AutoInjectedCrates.CORE
 import org.rust.cargo.util.AutoInjectedCrates.STD
@@ -63,9 +62,7 @@ fun processItemDeclarations(
     originalProcessor: RsResolveProcessor,
     ipm: ItemProcessingMode
 ): Boolean {
-    if (scope is RsMod) {
-        processItemDeclarations2(scope, ns, originalProcessor, ipm)?.let { return it }
-    }
+    processItemDeclarations2(scope, ns, originalProcessor, ipm)?.let { return it }
 
     val withPrivateImports = ipm != ItemProcessingMode.WITHOUT_PRIVATE_IMPORTS
 
@@ -118,7 +115,6 @@ fun processItemDeclarations(
             // Use items like `use foo;` or `use foo::{self}` are meaningful since 2018 edition
             // only if `foo` is a crate, and it is `pub use` item. Otherwise,
             // we should ignore it or it breaks resolve of such `foo` in other places.
-            ItemResolutionTestmarks.extraAtomUse.hit()
             if (!withPrivateImports) {
                 val crate = findDependencyCrateByName(path, name)
                 if (crate != null && processor(name, crate)) return true
@@ -157,7 +153,7 @@ fun processItemDeclarations(
         if (isAtLeastEdition2018 && !scope.isCrateRoot) {
             val crateRoot = scope.crateRoot
             if (crateRoot != null) {
-                val result = processWithShadowingAndUpdateScope(directlyDeclaredNames, originalProcessor) { shadowingProcessor ->
+                val result = processWithShadowingAndUpdateScope(directlyDeclaredNames, ns, originalProcessor) { shadowingProcessor ->
                     crateRoot.processExpandedItemsExceptImplsAndUses { item ->
                         if (item is RsExternCrateItem) {
                             processExternCrateItem(item, shadowingProcessor, true)
@@ -173,7 +169,7 @@ fun processItemDeclarations(
         // "extern_prelude" feature. Extern crate names can be resolved as if they were in the prelude.
         // See https://blog.rust-lang.org/2018/10/25/Rust-1.30.0.html#module-system-improvements
         // See https://github.com/rust-lang/rust/pull/54404/
-        val result = processWithShadowingAndUpdateScope(directlyDeclaredNames, originalProcessor) { shadowingProcessor ->
+        val result = processWithShadowingAndUpdateScope(directlyDeclaredNames, ns, originalProcessor) { shadowingProcessor ->
             val isCompletion = ipm == ItemProcessingMode.WITH_PRIVATE_IMPORTS_N_EXTERN_CRATES_COMPLETION
             processExternCrateResolveVariants(
                 scope,
@@ -215,7 +211,7 @@ fun processItemDeclarations(
         } ?: continue
 
         val found = recursionGuard(mod, {
-            processWithShadowing(directlyDeclaredNames, originalProcessor) { shadowingProcessor ->
+            processWithShadowing(directlyDeclaredNames, ns, originalProcessor) { shadowingProcessor ->
                 processItemOrEnumVariantDeclarations(
                     mod,
                     ns,
@@ -238,8 +234,6 @@ fun processExternCrateItem(item: RsExternCrateItem, processor: RsResolveProcesso
         val nameWithAlias = item.nameWithAlias
         if (nameWithAlias != "self") {
             if (processor(nameWithAlias, mod)) return true
-        } else {
-            ItemResolutionTestmarks.externCrateSelfWithoutAlias.hit()
         }
     }
     return false
@@ -289,9 +283,4 @@ enum class ItemProcessingMode(val withExternCrates: Boolean) {
     WITH_PRIVATE_IMPORTS(false),
     WITH_PRIVATE_IMPORTS_N_EXTERN_CRATES(true),
     WITH_PRIVATE_IMPORTS_N_EXTERN_CRATES_COMPLETION(true);
-}
-
-object ItemResolutionTestmarks {
-    val externCrateSelfWithoutAlias = Testmark("externCrateSelfWithoutAlias")
-    val extraAtomUse = Testmark("extraAtomUse")
 }

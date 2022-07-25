@@ -8,12 +8,19 @@ package org.rust.openapiext
 import com.intellij.concurrency.SensitiveProgressWrapper
 import com.intellij.ide.plugins.IdeaPluginDescriptor
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.ui.LafManager
+import com.intellij.ide.ui.laf.UIThemeBasedLookAndFeelInfo
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.Experiments
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.application.ex.ApplicationUtil
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.impl.TrailingSpacesStripper
@@ -22,21 +29,26 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.impl.FileDocumentManagerImpl
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.module.ModuleManager
+import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.util.AbstractProgressIndicatorExBase
 import com.intellij.openapi.progress.util.ProgressIndicatorUtils
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.*
+import com.intellij.openapi.util.NlsContexts.ProgressTitle
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileWithId
-import com.intellij.openapiext.isUnitTestMode
+import com.intellij.openapi.wm.ex.ProgressIndicatorEx
 import com.intellij.psi.*
 import com.intellij.psi.impl.PsiDocumentManagerBase
 import com.intellij.psi.search.GlobalSearchScope
@@ -45,15 +57,30 @@ import com.intellij.psi.stubs.StubIndexKey
 import com.intellij.psi.util.CachedValue
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.util.CachedValueImpl
+import com.intellij.util.concurrency.AppExecutorUtil
+import com.intellij.util.ui.UIUtil
 import org.jdom.Element
 import org.jdom.input.SAXBuilder
 import org.rust.cargo.RustfmtWatcher
 import org.rust.ide.annotator.RsExternalLinterPass
+import java.lang.ref.SoftReference
 import java.lang.reflect.Field
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.Pair
 import kotlin.reflect.KProperty
+
+val isUnitTestMode: Boolean get() = ApplicationManager.getApplication().isUnitTestMode
+val isHeadlessEnvironment: Boolean get() = ApplicationManager.getApplication().isHeadlessEnvironment
+val isDispatchThread: Boolean get() = ApplicationManager.getApplication().isDispatchThread
+val isInternal: Boolean get() = ApplicationManager.getApplication().isInternal
+val isUnderDarkTheme: Boolean
+    get() {
+        val lookAndFeel = LafManager.getInstance().currentLookAndFeel as? UIThemeBasedLookAndFeelInfo
+        return lookAndFeel?.theme?.isDark == true || UIUtil.isUnderDarcula()
+    }
 
 fun <T> Project.runWriteCommandAction(command: () -> T): T {
     return WriteCommandAction.runWriteCommandAction(this, Computable { command() })
@@ -121,6 +148,15 @@ fun VirtualFile.findFileByMaybeRelativePath(path: String): VirtualFile? =
         fileSystem.findFileByPath(path)
     else
         findFileByRelativePath(path)
+
+fun VirtualFile.findNearestExistingFile(path: String): Pair<VirtualFile, List<String>> {
+    var file = this
+    val segments = StringUtil.split(path, "/")
+    segments.forEachIndexed { i, segment ->
+        file = file.findChild(segment) ?: return file to segments.subList(i, segments.size)
+    }
+    return file to emptyList()
+}
 
 val VirtualFile.pathAsPath: Path get() = Paths.get(path)
 
@@ -235,14 +271,20 @@ inline fun testAssert(action: () -> Boolean, lazyMessage: () -> Any) {
 fun <T> runWithCheckCanceled(callable: () -> T): T =
     ApplicationUtil.runWithCheckCanceled(callable, ProgressManager.getInstance().progressIndicator)
 
-fun <T> Project.computeWithCancelableProgress(title: String, supplier: () -> T): T {
+fun <T> Project.computeWithCancelableProgress(
+    @Suppress("UnstableApiUsage") @ProgressTitle title: String,
+    supplier: () -> T
+): T {
     if (isUnitTestMode) {
         return supplier()
     }
     return ProgressManager.getInstance().runProcessWithProgressSynchronously<T, Exception>(supplier, title, true, this)
 }
 
-fun Project.runWithCancelableProgress(title: String, process: () -> Unit): Boolean {
+fun Project.runWithCancelableProgress(
+    @Suppress("UnstableApiUsage") @ProgressTitle title: String,
+    process: () -> Unit
+): Boolean {
     if (isUnitTestMode) {
         process()
         return true
@@ -272,8 +314,12 @@ fun <T : Any> executeUnderProgressWithWriteActionPriorityWithRetries(
     indicator: ProgressIndicator,
     action: (ProgressIndicator) -> T
 ): T {
-    checkReadAccessNotAllowed()
     indicator.checkCanceled()
+    if (isUnitTestMode && ApplicationManager.getApplication().isReadAccessAllowed) {
+        return action(indicator)
+    } else {
+        checkReadAccessNotAllowed()
+    }
     var result: T? = null
     do {
         val wrappedIndicator = SensitiveProgressWrapper(indicator)
@@ -311,6 +357,24 @@ fun <T> executeUnderProgress(indicator: ProgressIndicator, action: () -> T): T {
     return result ?: (null as T)
 }
 
+/**
+ * [this] indicator can be an instance of [com.intellij.openapi.progress.impl.BackgroundableProcessIndicator]
+ * class, which is thread sensitive and its [ProgressIndicator.checkCanceled] method should be used only from
+ * a single thread (see [com.intellij.openapi.progress.util.ProgressWindow.MyDelegate.checkCanceled]).
+ * So we propagate cancellation.
+ */
+fun ProgressIndicator.toThreadSafeProgressIndicator(): ProgressIndicator {
+    return if (this is ProgressIndicatorEx) {
+        val threadSafeIndicator = EmptyProgressIndicator()
+        addStateDelegate(object : AbstractProgressIndicatorExBase() {
+            override fun cancel() = threadSafeIndicator.cancel()
+        })
+        threadSafeIndicator
+    } else {
+        this
+    }
+}
+
 fun <T : PsiElement> T.createSmartPointer(): SmartPsiElementPointer<T> =
     SmartPointerManager.getInstance(project).createSmartPsiElementPointer(this)
 
@@ -331,7 +395,17 @@ val DataContext.elementUnderCaretInEditor: PsiElement?
         return psiFile.findElementAt(editor.caretModel.offset)
     }
 
-fun isFeatureEnabled(featureId: String): Boolean = Experiments.getInstance().isFeatureEnabled(featureId)
+fun isFeatureEnabled(featureId: String): Boolean {
+    // Hack to pass values of experimental features in headless IDE run
+    // Should help to configure IDE-based tools like Qodana
+    if (isHeadlessEnvironment) {
+        val value = System.getProperty(featureId)?.toBooleanStrictOrNull()
+        if (value != null) return value
+    }
+
+    return Experiments.getInstance().isFeatureEnabled(featureId)
+}
+
 fun setFeatureEnabled(featureId: String, enabled: Boolean) = Experiments.getInstance().setFeatureEnabled(featureId, enabled)
 
 fun <T> runWithEnabledFeatures(vararg featureIds: String, action: () -> T): T {
@@ -350,4 +424,54 @@ class CachedValueDelegate<T>(provider: () -> CachedValueProvider.Result<T>) {
     operator fun getValue(thisRef: Any?, property: KProperty<*>): T {
         return cachedValue.value
     }
+}
+
+/**
+ * Returns result of [provider] and store it in [dataHolder] among with [dependency].
+ * If stored dependency equals [dependency], then returns stored result, without invoking [provider].
+ */
+fun <T, D> getCachedOrCompute(
+    dataHolder: UserDataHolder,
+    key: Key<SoftReference<Pair<T, D>>>,
+    dependency: D,
+    provider: () -> T
+): T {
+    val oldResult = dataHolder.getUserData(key)?.get()
+    if (oldResult != null && oldResult.second == dependency) {
+        return oldResult.first
+    }
+    val value = provider()
+    dataHolder.putUserData(key, SoftReference(value to dependency))
+    return value
+}
+
+/** Intended to be invoked from EDT */
+inline fun <R> Project.nonBlocking(crossinline block: () -> R, crossinline uiContinuation: (R) -> Unit) {
+    if (isUnitTestMode) {
+        val result = block()
+        uiContinuation(result)
+    } else {
+        ReadAction.nonBlocking(Callable {
+            block()
+        })
+            .inSmartMode(this)
+            .expireWith(RsPluginDisposable.getInstance(this))
+            .finishOnUiThread(ModalityState.current()) { result ->
+                uiContinuation(result)
+            }.submit(AppExecutorUtil.getAppExecutorService())
+    }
+}
+
+@Service
+class RsPluginDisposable : Disposable {
+    companion object {
+        @JvmStatic
+        fun getInstance(project: Project): Disposable = project.service<RsPluginDisposable>()
+    }
+
+    override fun dispose() {}
+}
+
+inline fun <reified T: Configurable> Project.showSettingsDialog() {
+    ShowSettingsUtil.getInstance().showSettingsDialog(this, T::class.java)
 }

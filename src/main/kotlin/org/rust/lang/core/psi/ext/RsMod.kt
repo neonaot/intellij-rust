@@ -13,9 +13,8 @@ import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.RsModDeclItem
 import org.rust.lang.core.psi.RsModItem
 import org.rust.openapiext.findFileByMaybeRelativePath
-import java.util.*
 
-interface RsMod : RsQualifiedNamedElement, RsItemsOwner, RsVisible {
+interface RsMod : RsQualifiedNamedElement, RsItemsOwner, RsVisible, RsDocAndAttributeOwner {
     /**
      *  Returns a parent module (`super::` in paths).
      *
@@ -48,7 +47,6 @@ interface RsMod : RsQualifiedNamedElement, RsItemsOwner, RsVisible {
     /**
      *  Returns directory where direct submodules should be located
      */
-    @JvmDefault
     fun getOwnedDirectory(createIfNotExists: Boolean = false): PsiDirectory? {
         if (this is RsFile && name == RsConstants.MOD_RS_FILE || isCrateRoot) return contextualFile.originalFile.parent
 
@@ -91,6 +89,11 @@ val RsMod.superMods: List<RsMod>
             .toList()
     }
 
+val RsMod.hasChildModules
+    get() = expandedItemsExceptImplsAndUses.any {
+        it is RsModItem || it is RsModDeclItem
+    }
+
 val RsMod.childModules: List<RsMod>
     get() = expandedItemsExceptImplsAndUses
         .mapNotNull {
@@ -101,8 +104,8 @@ val RsMod.childModules: List<RsMod>
             }
         }
 
-fun RsMod.getChildModule(name: String): RsMod? =
-    childModules.find { it.modName == name }
+fun RsItemsOwner.getChildModule(name: String): RsMod? =
+    expandedItemsCached.named[name]?.filterIsInstance<RsMod>()?.singleOrNull()
 
 fun commonParentMod(mod1: RsMod, mod2: RsMod): RsMod? {
     val superMods1 = mod1.superMods.asReversed()

@@ -19,15 +19,16 @@ FILE
               PsiElement(<)('<')
               RsLifetimeImpl(LIFETIME)
                 PsiElement(QUOTE_IDENTIFIER)(''static')
-              PsiErrorElement:'#', '+', ',', '-', '::', <block expr>, <type>, '>', QUOTE_IDENTIFIER, identifier or '{' expected, got ':'
+              PsiErrorElement:'+', ',', '::', <expr>, <path start>, <type>, '>', QUOTE_IDENTIFIER or '{' expected, got ':'
                 <empty list>
       PsiElement(:)(':')
       PsiWhiteSpace(' ')
       PsiElement(QUOTE_IDENTIFIER)(''static')
       PsiErrorElement:':' expected, got '>'
         PsiElement(>)('>')
-      RsUnitExprImpl(UNIT_EXPR)
-        PsiElement(()('(')
-        PsiElement())(')')
+      RsExprStmtImpl(EXPR_STMT)
+        RsUnitExprImpl(UNIT_EXPR)
+          PsiElement(()('(')
+          PsiElement())(')')
       PsiWhiteSpace('\n')
       PsiElement(})('}')

@@ -217,6 +217,7 @@ class RsTypeAwareCompletionTest : RsCompletionTestBase() {
     """)
 
     fun `test impl for 'Sized' type parameter is not completed for trait object`() = checkNotContainsCompletion("bar", """
+        #[lang = "sized"] trait Sized {}
         trait Foo { fn foo(&self); fn foo2(&self); }
         trait Bar { fn bar(&self); }
         impl<T> Bar for T {
@@ -224,6 +225,35 @@ class RsTypeAwareCompletionTest : RsCompletionTestBase() {
         }
         fn foo(a: &dyn Foo) {
             (*a)./*caret*/
+        }
+    """)
+
+    // Issue https://github.com/intellij-rust/intellij-rust/issues/8236
+    fun `test select impl with associated type projection in trait ref`() = checkContainsCompletion("foo", """
+        struct S;
+        struct X;
+        trait Trait { type Item; }
+        impl Trait for S { type Item = X; }
+
+        trait Bound<A> {}
+        impl Bound<<S as Trait>::Item> for S {}
+
+        struct Wrap<B>(B);
+        impl<C, D> Wrap<C> where C: Bound<D> {
+            fn foo(&self) -> D { todo!() }
+        }
+        fn main() {
+            let a = Wrap(S);
+            a./*caret*/;
+        }
+    """)
+
+    fun `test no completion for a method with ref self in ref impl`() = checkNoCompletion("""
+        struct S;
+        impl<'a> Foo for &'a S {}
+        trait Foo { fn foo(&self) {} }
+        fn main() {
+            S.fo/*caret*/;
         }
     """)
 }

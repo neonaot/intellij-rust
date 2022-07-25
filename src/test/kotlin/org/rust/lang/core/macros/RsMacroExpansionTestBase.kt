@@ -6,7 +6,6 @@
 package org.rust.lang.core.macros
 
 import com.intellij.openapi.util.text.StringUtil
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiFile
 import com.intellij.psi.codeStyle.CodeStyleManager
 import junit.framework.ComparisonFailure
@@ -20,25 +19,18 @@ import org.rust.lang.core.psi.RsMacroCall
 import org.rust.lang.core.psi.RsPsiFactory
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve2.resolveToMacroWithoutPsi
+import org.rust.openapiext.Testmark
 import org.rust.stdext.RsResult
 import org.rust.stdext.unwrapOrElse
 import kotlin.math.min
 
 abstract class RsMacroExpansionTestBase : RsTestBase() {
-    fun doTest(@Language("Rust") code: String, @Language("Rust") vararg expectedExpansions: Pair<String, Testmark?>) {
+    protected fun doTest(@Language("Rust") code: String, @Language("Rust") vararg expectedExpansions: Pair<String, Testmark?>) {
         InlineFile(code)
         checkAllMacroExpansionsInFile(myFixture.file, expectedExpansions)
     }
 
-    fun doTest(
-        mark: Testmark,
-        @Language("Rust") code: String,
-        @Language("Rust") vararg expectedExpansions: String
-    ) {
-        mark.checkHit { doTest(code, *expectedExpansions) }
-    }
-
-    fun doTest(
+    protected fun doTest(
         @Language("Rust") code: String,
         @Language("Rust") vararg expectedExpansions: String
     ) {
@@ -64,25 +56,23 @@ abstract class RsMacroExpansionTestBase : RsTestBase() {
             }
     }
 
-    fun checkSingleMacro(@Language("Rust") code: String, @Language("Rust") expectedExpansion: String) {
+    protected fun checkSingleMacro(@Language("Rust") code: String, @Language("Rust") expectedExpansion: String) {
         InlineFile(code)
         val call = findElementInEditor<RsMacroCall>("^")
         checkMacroExpansion(call, expectedExpansion, "Macro comparison failed")
     }
 
-    fun checkSingleMacroByTree(@Language("Rust") code: String, @Language("Rust") expectedExpansion: String) {
+    protected fun checkSingleMacroByTree(@Language("Rust") code: String, @Language("Rust") expectedExpansion: String) {
         fileTreeFromText(code).createAndOpenFileWithCaretMarker()
         val call = findElementInEditor<RsMacroCall>("^")
         checkMacroExpansion(call, expectedExpansion, "Macro comparison failed")
     }
 
-    fun doErrorTest(@Language("Rust") code: String, mark: Testmark) {
+    protected fun doErrorTest(@Language("Rust") code: String) {
         InlineFile(code)
-        mark.checkHit {
-            val call = findElementInEditor<RsMacroCall>("^")
-            val def = call.resolveToMacro() ?: error("Failed to resolve macro ${call.path.text}")
-            check(expandMacroAsTextWithErr(call, RsDeclMacroData(def)).isErr)
-        }
+        val call = findElementInEditor<RsMacroCall>("^")
+        val def = call.resolveToMacro() ?: error("Failed to resolve macro ${call.path.text}")
+        check(expandMacroAsTextWithErr(call, RsDeclMacroData(def)).isErr)
     }
 
     private fun checkMacroExpansion(
@@ -126,7 +116,14 @@ abstract class RsMacroExpansionTestBase : RsTestBase() {
         def: RsDeclMacroData
     ): RsResult<MacroExpansion, MacroExpansionAndParsingError<DeclMacroExpansionError>> {
         val expander = DeclMacroExpander(project)
-        return expander.expandMacro(def, call, RsPsiFactory(project, markGenerated = false), true).map {
+        val expansionResult = expander.expandMacro(
+            RsMacroDataWithHash(def, null),
+            call,
+            RsPsiFactory(project, markGenerated = false),
+            storeRangeMap = true,
+            useCache = false
+        )
+        return expansionResult.map {
             it.elements.forEach { el ->
                 el.setContext(call.context as RsElement)
                 el.setExpandedFrom(call)
@@ -150,5 +147,6 @@ abstract class RsMacroExpansionTestBase : RsTestBase() {
             }
         }
         DeclMacroExpansionError.DefSyntax -> "syntax error in the macro definition"
+        DeclMacroExpansionError.TooLargeExpansion -> "too large expansion"
     }
 }

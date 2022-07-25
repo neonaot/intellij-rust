@@ -62,15 +62,15 @@ class CreateTupleStructIntentionTest : RsIntentionTestBase(CreateTupleStructInte
         }
     """)
 
-    fun `test unknown type`() = doAvailableTest("""
+    fun `test unknown types`() = doAvailableTestWithLiveTemplate("""
         fn main() {
-            Foo/*caret*/(Bar);
+            Foo/*caret*/(1, Bar, 2, Baz, (Unknown1, Unknown2));
         }
-    """, """
-        struct Foo(_);
+    """, "Type1\tType2\tType3\tType4\t", """
+        struct Foo(i32, Type1, i32, Type2, (Type3, Type4));
 
         fn main() {
-            Foo(Bar);
+            Foo(1, Bar, 2, Baz, (Unknown1, Unknown2));
         }
     """)
 
@@ -153,7 +153,7 @@ class CreateTupleStructIntentionTest : RsIntentionTestBase(CreateTupleStructInte
             Foo/*caret*/(bar::S);
         }
     """, """
-        use bar::S;
+        use crate::bar::S;
 
         mod bar {
             pub struct S;

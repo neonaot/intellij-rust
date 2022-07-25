@@ -14,10 +14,12 @@ import com.intellij.codeInsight.hints.presentation.MenuOnClickPresentation
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiWhiteSpace
+import org.rust.RsBundle
 import org.rust.lang.RsLanguage
 import org.rust.lang.core.psi.RsDotExpr
 import org.rust.lang.core.psi.RsFile
@@ -35,22 +37,29 @@ import org.rust.lang.core.types.ty.Ty
 import org.rust.lang.core.types.ty.TyAnon
 import org.rust.lang.core.types.ty.TyUnknown
 import org.rust.lang.core.types.type
+import org.rust.openapiext.escaped
 import javax.swing.JComponent
 import javax.swing.JPanel
 
 class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHintsProvider.Settings> {
     override val key: SettingsKey<Settings> get() = KEY
 
-    override val name: String get() = "Chain method hints"
+    override val name: String get() = RsBundle.message("settings.rust.inlay.hints.title.method.chains")
 
     override val previewText: String? = null
 
-    override fun createConfigurable(settings: Settings): ImmediateConfigurable = object : ImmediateConfigurable {
+    override val group: InlayGroup
+        get() = InlayGroup.METHOD_CHAINS_GROUP
 
+    override fun createConfigurable(settings: Settings): ImmediateConfigurable = object : ImmediateConfigurable {
+        override val mainCheckboxText: String
+            get() = RsBundle.message("settings.rust.inlay.hints.for")
         override val cases: List<Case>
             get() = listOf(
-                Case("Show same consecutive types", "consecutive_types", settings::showSameConsecutiveTypes),
-                Case("Show iterators as `impl Iterator<...>`", "iterators", settings::iteratorSpecialCase)
+                Case(RsBundle.message("settings.rust.inlay.hints.for.same.consecutive.types"), "consecutive_types", settings::showSameConsecutiveTypes),
+                // New inlay hint settings consider case name as html, as a result `<...>` isn't rendered properly.
+                // So let's escape it if needed
+                Case(RsBundle.message("settings.rust.inlay.hints.for.iterators").escapeIfNeeded(), "iterators", settings::iteratorSpecialCase)
             )
 
         override fun createComponent(listener: ChangeListener): JComponent = JPanel()
@@ -63,21 +72,24 @@ class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHints
         editor: Editor,
         settings: Settings,
         sink: InlayHintsSink
-    ): InlayHintsCollector =
-        object : FactoryInlayHintsCollector(editor) {
+    ): InlayHintsCollector {
+        val project = file.project
+        val crate = (file as? RsFile)?.crate
+
+        return object : FactoryInlayHintsCollector(editor) {
             val typeHintsFactory = RsTypeHintsPresentationFactory(factory, true)
 
             private val lookupAndIteratorTrait: Pair<ImplLookup?, BoundElement<RsTraitItem>?> by lazy(LazyThreadSafetyMode.PUBLICATION) {
-                val (lookup, items) = (file as? RsFile)?.implLookupAndKnownItems ?: null to null
+                val (lookup, items) = (file as? RsFile)?.implLookupAndKnownItems ?: (null to null)
                 val iterator = items?.Iterator?.let { BoundElement(it) }
                 lookup to iterator
             }
 
             override fun collect(element: PsiElement, editor: Editor, sink: InlayHintsSink): Boolean {
-                if (DumbService.isDumb(element.project)) return true
+                if (DumbService.isDumb(project)) return true
                 if (element !is RsMethodCall) return true
                 if (!element.isLastInChain) return true
-                if (!element.existsAfterExpansion) return true
+                if (!element.existsAfterExpansion(crate)) return true
 
                 val (lookup, iterator) = lookupAndIteratorTrait
 
@@ -86,7 +98,7 @@ class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHints
                 for (call in chain.dropLast(1)) {
                     val type = normalizeType(call.type, lookup, iterator)
                     if (type != TyUnknown && call.isLastOnLine) {
-                        if (settings.showSameConsecutiveTypes || type != lastType) {
+                        if (settings.showSameConsecutiveTypes || !type.isEquivalentTo(lastType)) {
                             presentTypeForMethodCall(call, type)
                         }
                         lastType = type
@@ -97,7 +109,6 @@ class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHints
             }
 
             private fun presentTypeForMethodCall(call: RsMethodCall, type: Ty) {
-                val project = call.project
                 val presentation = typeHintsFactory.typeHint(type)
                 val finalPresentation = presentation.withDisableAction(project)
                 sink.addInlineElement(call.endOffset, true, finalPresentation, false)
@@ -114,6 +125,7 @@ class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHints
                 return TyAnon(null, listOf(iteratorTrait.copy(assoc = assoc)))
             }
         }
+    }
 
     private fun InlayPresentation.withDisableAction(project: Project): InsetPresentation = InsetPresentation(
         MenuOnClickPresentation(this, project) {
@@ -128,6 +140,13 @@ class RsChainMethodTypeHintsProvider : InlayHintsProvider<RsChainMethodTypeHints
 
     companion object {
         val KEY: SettingsKey<Settings> = SettingsKey("chain-method.hints")
+
+        private fun String.escapeIfNeeded(): String = if (isNewSettingsEnabled) escaped else this
+
+        private val isNewSettingsEnabled: Boolean
+            get() {
+                return Registry.`is`("new.inlay.settings", false)
+            }
     }
 }
 

@@ -6,17 +6,16 @@
 package org.rust.cargo.project.workspace
 
 import com.google.common.annotations.VisibleForTesting
-import com.intellij.execution.ExecutionException
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.util.io.delete
 import com.intellij.util.io.exists
 import org.rust.cargo.CargoConstants
 import org.rust.cargo.CfgOptions
+import org.rust.cargo.project.model.ProcessProgressListener
 import org.rust.cargo.project.model.RustcInfo
 import org.rust.cargo.project.settings.toolchain
 import org.rust.cargo.toolchain.impl.CargoMetadata
@@ -29,9 +28,11 @@ import org.rust.cargo.util.StdLibType
 import org.rust.ide.experiments.RsExperiments
 import org.rust.openapiext.RsPathManager
 import org.rust.openapiext.isFeatureEnabled
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.pathAsPath
 import org.rust.stdext.HashCode
 import org.rust.stdext.toPath
+import org.rust.stdext.unwrapOrElse
 import java.io.IOException
 import java.nio.file.Path
 
@@ -52,28 +53,37 @@ data class StandardLibrary(
             project: Project,
             path: String,
             rustcInfo: RustcInfo?,
-            isPartOfCargoProject: Boolean = false
+            isPartOfCargoProject: Boolean = false,
+            listener: ProcessProgressListener? = null
         ): StandardLibrary? = LocalFileSystem.getInstance().findFileByPath(path)?.let {
-            fromFile(project, it, rustcInfo, isPartOfCargoProject)
+            fromFile(project, it, rustcInfo, isPartOfCargoProject, listener)
         }
 
         fun fromFile(
             project: Project,
             sources: VirtualFile,
             rustcInfo: RustcInfo?,
-            isPartOfCargoProject: Boolean = false
+            isPartOfCargoProject: Boolean = false,
+            listener: ProcessProgressListener? = null
         ): StandardLibrary? {
             val srcDir = findSrcDir(sources) ?: return null
+
+            fun warn(message: String) {
+                LOG.warn(message)
+                listener?.warning(message, "")
+            }
 
             val stdlib = if (isFeatureEnabled(RsExperiments.FETCH_ACTUAL_STDLIB_METADATA) && !isPartOfCargoProject) {
                 val rustcVersion = rustcInfo?.version
                 val semverVersion = rustcVersion?.semver
                 if (semverVersion == null) {
-                    LOG.warn("Toolchain version is unknown. Hardcoded stdlib structure will be used")
+                    warn("Toolchain version is unknown. Hardcoded stdlib structure will be used")
                     fetchHardcodedStdlib(srcDir)
                 } else {
-                    val result = fetchActualStdlib(project, srcDir, rustcVersion)
-                    // TODO: show some warning to users if result is null
+                    val result = fetchActualStdlib(project, srcDir, rustcVersion, rustcInfo.rustupActiveToolchain, listener)
+                    if (result == null) {
+                        warn("Fetching actual stdlib info failed. Hardcoded stdlib structure will be used")
+                    }
                     result ?: fetchHardcodedStdlib(srcDir)
                 }
             } else {
@@ -97,17 +107,19 @@ data class StandardLibrary(
             project: Project,
             srcDir: VirtualFile,
             version: RustcVersion,
+            activeToolchain: String?,
+            listener: ProcessProgressListener?,
             cleanVendorDir: Boolean = false
         ): StandardLibrary? {
             try {
-                return StdlibDataFetcher.create(project, srcDir, version, cleanVendorDir)?.fetchStdlibData()
+                return StdlibDataFetcher.create(project, srcDir, version, activeToolchain, listener, cleanVendorDir)?.fetchStdlibData()
             } catch (e: Throwable) {
                 if (!isUnitTestMode) {
                     // Logger.error in tests, fail the test
                     LOG.error(e)
                 }
                 if (!cleanVendorDir && e is CargoMetadataException) {
-                    return fetchActualStdlib(project, srcDir, version, cleanVendorDir = true)
+                    return fetchActualStdlib(project, srcDir, version, activeToolchain, listener, cleanVendorDir = true)
                 }
             }
             return null
@@ -174,7 +186,9 @@ class StdlibDataFetcher private constructor(
     private val cargo: Cargo,
     private val srcDir: VirtualFile,
     private val testPackageSrcDir: VirtualFile,
-    private val stdlibDependenciesDir: Path
+    private val stdlibDependenciesDir: Path,
+    private val activeToolchain: String?,
+    private val listener: ProcessProgressListener?
 ) {
     private val workspaceMembers = mutableListOf<PackageId>()
     private val visitedPackages = mutableSetOf<PackageId>()
@@ -281,10 +295,9 @@ class StdlibDataFetcher private constructor(
             return
         }
 
-        val metadataProject = try {
-            cargo.fetchMetadata(project, pathAsPath)
-        } catch (e: ExecutionException) {
-            LOG.error(e)
+        val metadataProject = cargo.fetchMetadata(project, pathAsPath, activeToolchain, listener).unwrapOrElse {
+            listener?.error("Failed to fetch stdlib package info", it.message.orEmpty())
+            LOG.error(it)
             return
         }
 
@@ -295,7 +308,14 @@ class StdlibDataFetcher private constructor(
     companion object {
         private val LOG: Logger = logger<StdlibDataFetcher>()
 
-        fun create(project: Project, srcDir: VirtualFile, version: RustcVersion, cleanVendorDir: Boolean): StdlibDataFetcher? {
+        fun create(
+            project: Project,
+            srcDir: VirtualFile,
+            version: RustcVersion,
+            activeToolchain: String?,
+            listener: ProcessProgressListener?,
+            cleanVendorDir: Boolean
+        ): StdlibDataFetcher? {
             val cargo = project.toolchain?.cargo() ?: return null
 
             val testPackageSrcPaths = listOf(AutoInjectedCrates.TEST, "lib${AutoInjectedCrates.TEST}")
@@ -307,10 +327,19 @@ class StdlibDataFetcher private constructor(
                 srcDir,
                 testPackageSrcDir,
                 version,
+                activeToolchain,
+                listener,
                 cleanVendorDir
+            ) ?: return null
+            return StdlibDataFetcher(
+                project,
+                cargo,
+                srcDir,
+                testPackageSrcDir,
+                stdlibDependenciesDir,
+                activeToolchain,
+                listener
             )
-                ?: return null
-            return StdlibDataFetcher(project, cargo, srcDir, testPackageSrcDir, stdlibDependenciesDir)
         }
 
         @VisibleForTesting
@@ -325,6 +354,8 @@ class StdlibDataFetcher private constructor(
             srcDir: VirtualFile,
             testPackageSrcDir: VirtualFile,
             version: RustcVersion,
+            activeToolchain: String?,
+            listener: ProcessProgressListener?,
             cleanVendorDir: Boolean
         ): Path? {
             val stdlibVendor = stdlibVendorDir(srcDir, version)
@@ -340,12 +371,11 @@ class StdlibDataFetcher private constructor(
             }
 
             if (!stdlibVendorExists) {
-                try {
-                    // `test` package depends on all other stdlib packages,
-                    // so it's enough to vendor only its dependencies
-                    cargo.vendorDependencies(project, testPackageSrcDir.pathAsPath, stdlibVendor)
-                } catch (e: ExecutionException) {
-                    LOG.error(e)
+                // `test` package depends on all other stdlib packages,
+                // so it's enough to vendor only its dependencies
+                cargo.vendorDependencies(project, testPackageSrcDir.pathAsPath, stdlibVendor, activeToolchain, listener).unwrapOrElse {
+                    listener?.error("Failed to load stdlib dependencies", it.message.orEmpty())
+                    LOG.error(it)
                     return null
                 }
             }

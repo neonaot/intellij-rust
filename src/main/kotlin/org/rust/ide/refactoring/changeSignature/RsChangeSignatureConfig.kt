@@ -12,6 +12,7 @@ import com.intellij.refactoring.changeSignature.ParameterInfo
 import com.intellij.refactoring.changeSignature.ParameterInfo.NEW_PARAMETER
 import org.rust.ide.refactoring.RsFunctionSignatureConfig
 import org.rust.lang.RsLanguage
+import org.rust.lang.core.macros.setContext
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.types.ty.Ty
@@ -49,7 +50,8 @@ sealed class ParameterProperty<T: RsElement> {
     class Empty<T: RsElement> : ParameterProperty<T>()
     class Invalid<T: RsElement>(override val text: String) : ParameterProperty<T>()
     class Valid<T: RsElement>(override val item: T) : ParameterProperty<T>() {
-        override val text: String = item.text
+        override val text: String
+            get() = item.text
     }
 
     open val text: String = ""
@@ -147,9 +149,16 @@ class RsChangeFunctionSignatureConfig private constructor(
     companion object {
         fun create(function: RsFunction): RsChangeFunctionSignatureConfig {
             val factory = RsPsiFactory(function.project)
-            val parameters = function.valueParameters.mapIndexed { index, parameter ->
+            val parameters = function.rawValueParameters.mapIndexed { index, parameter ->
                 val patText = parameter.pat?.text ?: "_"
-                val type = ParameterProperty.fromItem(parameter.typeReference)
+                // The element has to be copied, otherwise suggested refactoring API
+                // would revert the PSI item to its previous state
+                val parameterCopy = (parameter.typeReference?.copy() as? RsTypeReference)
+                    ?.also {
+                        val context = parameter.typeReference?.parent?.context as? RsElement
+                        context?.let { it1 -> it.setContext(it1) }
+                    }
+                val type = ParameterProperty.fromItem(parameterCopy)
                 Parameter(factory, patText, type, index)
             }
             return RsChangeFunctionSignatureConfig(

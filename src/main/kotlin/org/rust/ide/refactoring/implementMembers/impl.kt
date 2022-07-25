@@ -10,10 +10,7 @@ import com.intellij.openapi.application.runWriteAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiWhiteSpace
-import org.rust.ide.presentation.ImportingPsiRenderer
-import org.rust.ide.presentation.PsiRenderingOptions
-import org.rust.ide.presentation.renderFunctionSignature
-import org.rust.ide.presentation.renderTypeReference
+import org.rust.ide.presentation.*
 import org.rust.ide.settings.RsCodeInsightSettings
 import org.rust.ide.utils.import.ImportCandidate
 import org.rust.ide.utils.import.import
@@ -29,8 +26,8 @@ import org.rust.lang.core.types.type
 import org.rust.openapiext.checkReadAccessAllowed
 import org.rust.openapiext.checkWriteAccessAllowed
 import org.rust.openapiext.checkWriteAccessNotAllowed
-import kotlin.math.max
 import org.rust.openapiext.selectElement
+import kotlin.math.max
 
 fun generateTraitMembers(impl: RsImplItem, editor: Editor?) {
     checkWriteAccessNotAllowed()
@@ -136,7 +133,7 @@ private fun insertNewTraitMembers(
 
         if (needToSelect == null) {
             needToSelect = when (addedMember) {
-                is RsFunction -> addedMember.block?.expr
+                is RsFunction -> addedMember.block?.syntaxTailStmt
                 is RsTypeAlias -> addedMember.typeReference
                 is RsConstant -> addedMember.expr
                 else -> error("unreachable")
@@ -167,7 +164,7 @@ private fun simplifyConstExprs(insertedMembers: List<RsAbstractable>) {
                 .mapNotNull { it.expr }
         for (expr in constExprs) {
             if (expr is RsBlockExpr) {
-                val wrappingExpr = expr.block.expr
+                val wrappingExpr = expr.block.singleTailStmt()?.expr
                 if (wrappingExpr != null && (wrappingExpr !is RsPathExpr || expr.parent is RsArrayType)) {
                     expr.replace(wrappingExpr)
                 }
@@ -216,7 +213,7 @@ class MembersGenerator(
                 "const ${element.nameLikeElement.text}: ${element.typeReference?.renderTypeReference() ?: "_"} = ${initialValue.text};"
             }
             is RsTypeAlias ->
-                "type ${element.escapedName} = ();"
+                "${element.renderTypeAliasSignature()} = ();"
             is RsFunction ->
                 "${element.renderFunctionSignature()} {\n        todo!()\n    }"
             else ->
@@ -225,5 +222,6 @@ class MembersGenerator(
     }
 
     private fun RsFunction.renderFunctionSignature(): String = renderer.renderFunctionSignature(this)
+    private fun RsTypeAlias.renderTypeAliasSignature(): String = renderer.renderTypeAliasSignature(this, renderBounds = false)
     private fun RsTypeReference.renderTypeReference(): String = renderer.renderTypeReference(this)
 }

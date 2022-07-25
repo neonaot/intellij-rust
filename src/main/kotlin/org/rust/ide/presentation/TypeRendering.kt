@@ -5,8 +5,8 @@
 
 package org.rust.ide.presentation
 
-import org.rust.ide.utils.import.ImportCandidatesCollector.findImportCandidate
-import org.rust.ide.utils.import.ImportContext
+import org.rust.ide.utils.import.ImportCandidatesCollector2
+import org.rust.ide.utils.import.ImportContext2
 import org.rust.lang.core.psi.RsConstParameter
 import org.rust.lang.core.psi.RsLifetimeParameter
 import org.rust.lang.core.psi.RsTraitItem
@@ -271,11 +271,11 @@ private data class TypeRenderer(
     ): List<String> {
         val renderedList = mutableListOf<String>()
         var nonDefaultParamFound = false
-        for (parameter in declaration.genericParameters.asReversed()) {
+        for (parameter in declaration.getGenericParameters().asReversed()) {
             if (skipUnchangedDefaultTypeArguments && !nonDefaultParamFound) {
                 if (parameter is RsTypeParameter &&
                     parameter.typeReference != null &&
-                    parameter.typeReference?.type == subst[parameter]) {
+                    parameter.typeReference?.type?.isEquivalentTo(subst[parameter]) == true) {
                     continue
                 } else {
                     nonDefaultParamFound = true
@@ -296,8 +296,11 @@ private data class TypeRenderer(
 
     private fun getName(element: RsNamedElement): String? =
         if (element is RsQualifiedNamedElement && element in useQualifiedName) {
-            val importingContext = context?.let { ImportContext.from(context.project, it) }
-            val candidate = importingContext?.let { findImportCandidate(it, element) }
+            val candidate = run {
+                if (context == null) return@run null
+                val importContext = ImportContext2.from(context, ImportContext2.Type.OTHER) ?: return@run null
+                ImportCandidatesCollector2.findImportCandidate(importContext, element)
+            }
             candidate?.info?.usePath ?: element.qualifiedName
         } else {
             element.name

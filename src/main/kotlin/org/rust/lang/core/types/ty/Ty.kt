@@ -10,6 +10,7 @@ import org.rust.lang.core.psi.RsStructItem
 import org.rust.lang.core.psi.RsTypeAlias
 import org.rust.lang.core.psi.ext.fields
 import org.rust.lang.core.resolve.ImplLookup
+import org.rust.lang.core.resolve.KnownItems
 import org.rust.lang.core.resolve.knownItems
 import org.rust.lang.core.types.*
 import org.rust.lang.core.types.infer.TypeFoldable
@@ -49,6 +50,20 @@ abstract class Ty(override val flags: TypeFlags = 0) : Kind, TypeFoldable<Ty> {
      * User visible string representation of a type
      */
     final override fun toString(): String = render(useAliasNames = false, skipUnchangedDefaultTypeArguments = false)
+
+    /**
+     * Use it instead of [equals] if you want to check that the types are the same from the Rust perspective.
+     *
+     * ```rust
+     * type A = i32;
+     * fn foo(a: A, b: i32) {
+     *     // Types `A` and `B` are *equivalent*, but not equal
+     * }
+     * ```
+     */
+    fun isEquivalentTo(other: Ty?): Boolean = other != null && isEquivalentToInner(other)
+
+    protected open fun isEquivalentToInner(other: Ty): Boolean = equals(other)
 }
 
 enum class Mutability {
@@ -65,47 +80,16 @@ enum class Mutability {
     }
 }
 
-fun Ty.getTypeParameter(name: String): TyTypeParameter? {
-    return typeParameterValues.typeParameterByName(name)
+enum class BorrowKind {
+    /** `&expr` or `&mut expr` */
+    REF,
+
+    /** `&raw const expr` or `&raw mut expr` */
+    RAW
 }
 
-/**
- * See `org.rust.lang.core.type.RsImplicitTraitsTest`
- */
-fun Ty.isSized(): Boolean {
-    val ancestors = mutableSetOf(this)
-
-    fun Ty.isSizedInner(): Boolean {
-        return when (this) {
-            is TyNumeric,
-            is TyBool,
-            is TyChar,
-            is TyUnit,
-            is TyNever,
-            is TyReference,
-            is TyPointer,
-            is TyArray,
-            is TyFunction -> true
-
-            is TyStr, is TySlice, is TyTraitObject -> false
-
-            is TyTypeParameter -> isSized
-
-            is TyAdt -> {
-                val item = item as? RsStructItem ?: return true
-                val typeRef = item.fields.lastOrNull()?.typeReference
-                val type = typeRef?.type?.substitute(typeParameterValues) ?: return true
-                if (!ancestors.add(type)) return true
-                type.isSizedInner()
-            }
-
-            is TyTuple -> types.last().isSizedInner()
-
-            else -> true
-        }
-    }
-
-    return isSizedInner()
+fun Ty.getTypeParameter(name: String): TyTypeParameter? {
+    return typeParameterValues.typeParameterByName(name)
 }
 
 val Ty.isSelf: Boolean
@@ -159,8 +143,9 @@ private fun pushSubTypes(stack: Deque<Ty>, parentTy: Ty) {
     }
 }
 
-fun Ty.builtinDeref(explicit: Boolean = true): Pair<Ty, Mutability>? =
+fun Ty.builtinDeref(items: KnownItems, explicit: Boolean = true): Pair<Ty, Mutability>? =
     when {
+        this is TyAdt && item == items.Box -> Pair(typeArguments.firstOrNull() ?: TyUnknown, Mutability.IMMUTABLE)
         this is TyReference -> Pair(referenced, mutability)
         this is TyPointer && explicit -> Pair(referenced, mutability)
         else -> null
@@ -171,6 +156,28 @@ tailrec fun Ty.stripReferences(): Ty =
         is TyReference -> referenced.stripReferences()
         else -> this
     }
+
+fun Ty.structTail(): Ty? {
+    val ancestors = mutableSetOf(this)
+
+    fun structTailInner(ty: Ty): Ty? {
+        return when (ty) {
+            is TyAdt -> {
+                val item = ty.item as? RsStructItem ?: return ty
+                val typeRef = item.fields.lastOrNull()?.typeReference
+                val fieldTy = typeRef?.type?.substitute(ty.typeParameterValues) ?: return null
+                if (!ancestors.add(fieldTy)) return null
+                structTailInner(fieldTy)
+            }
+
+            is TyTuple -> structTailInner(ty.types.last())
+
+            else -> ty
+        }
+    }
+
+    return structTailInner(this)
+}
 
 /**
  * TODO:

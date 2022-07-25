@@ -5,7 +5,6 @@
 
 package org.rust.lang.core.type
 
-import com.intellij.openapiext.Testmark
 import org.intellij.lang.annotations.Language
 import org.rust.RsTestBase
 import org.rust.fileTreeFromText
@@ -28,13 +27,6 @@ abstract class RsTypificationTestBase : RsTestBase() {
         if (!allowErrors) checkNoInferenceErrors()
         checkAllExpressionsTypified()
     }
-
-    protected fun testExpr(
-        @Language("Rust") code: String,
-        mark: Testmark,
-        description: String = "",
-        allowErrors: Boolean = false
-    ) = mark.checkHit { testExpr(code, description, allowErrors) }
 
     protected fun stubOnlyTypeInfer(@Language("Rust") code: String, description: String = "", allowErrors: Boolean = false) {
         val testProject = fileTreeFromText(code)

@@ -79,7 +79,6 @@ class IntroduceLocalVariableIntentionTest : RsIntentionTestBase(IntroduceLocalVa
         }
     """)
 
-    // TODO really should put `i` as a tail expr (leaving semantics the same), looks like a bug in the refactoring
     fun `test tail exp`() = doAvailableTest("""
         fn foo() -> i32 {
             0/*caret*/
@@ -87,6 +86,7 @@ class IntroduceLocalVariableIntentionTest : RsIntentionTestBase(IntroduceLocalVa
     """, """
         fn foo() -> i32 {
             let /*caret*/i = 0;
+            i
         }
     """)
 
@@ -98,6 +98,53 @@ class IntroduceLocalVariableIntentionTest : RsIntentionTestBase(IntroduceLocalVa
         fn foo() -> i32 {
             let /*caret*/i = 0;
             return i;
+        }
+    """)
+
+    fun `test match arm expr`() = doAvailableTest("""
+        fn func() -> i32 {
+            match f {
+                true => 1/*caret*/,
+                false => 0,
+            }
+        }
+    """, """
+        fn func() -> i32 {
+            let i = 1;
+            match f {
+                true => i,
+                false => 0,
+            }
+        }
+    """)
+
+    fun `test match arm return expr`() = doAvailableTest("""
+        fn func() -> i32 {
+            match f {
+                true => return 1/*caret*/,
+                false => 0,
+            }
+        }
+    """, """
+        fn func() -> i32 {
+            let i = 1;
+            match f {
+                true => return i,
+                false => 0,
+            }
+        }
+    """)
+
+    fun `test lambda expr`() = doAvailableTest("""
+        fn func() -> i32 {
+            let l = || 1/*caret*/;
+        }
+    """, """
+        fn func() -> i32 {
+            let l = || {
+                let i = 1;
+                i
+            };
         }
     """)
 }

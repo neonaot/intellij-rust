@@ -21,15 +21,15 @@ import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.util.io.HttpRequests
 import org.jetbrains.annotations.TestOnly
 import org.rust.RsBundle
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.ide.notifications.showBalloon
 import org.rust.ide.utils.USER_AGENT
 import org.rust.lang.core.psi.RsFile
 import org.rust.openapiext.JsonUtils
+import org.rust.openapiext.isUnitTestMode
 import java.awt.datatransfer.StringSelection
 
 class ShareInPlaygroundAction : DumbAwareAction() {
@@ -65,7 +65,7 @@ class ShareInPlaygroundAction : DumbAwareAction() {
             if (!confirmShare(file, hasSelection)) return
 
             val channel = file.cargoProject?.rustcInfo?.version?.channel?.channel ?: "stable"
-            val edition = (file.crate?.edition ?: CargoWorkspace.Edition.EDITION_2018).presentation
+            val edition = (file.crate?.edition ?: Edition.DEFAULT).presentation
 
             object : Task.Backgroundable(project, RsBundle.message("action.Rust.ShareInPlayground.progress.title")) {
 

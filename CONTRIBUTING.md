@@ -114,13 +114,6 @@ And also a tutorial series "Contributing to Intellij-Rust" by [@Kobzol](https://
   - [\#5: Lint attribute completion](https://kobzol.github.io/rust/intellij/2020/10/26/contributing-5-lint-attribute-completion.html).
 
 
-## CLA
-
-We require a contributor license agreement for all contributions. You can sign it 
-electronically at https://www.jetbrains.com/agreements/cla/ via DocuSign. The procedure
-consists of a couple of emails and clicks: no need to scan or print or snail-mail anything :)
-`CONTRIBUTORS.txt` file stores GitHub usernames of people who already signed a CLA.
-  
 ## Code style
 
 Please use **reformat code** action to maintain consistent style. Pay attention
@@ -171,13 +164,14 @@ change. Common tags are:
   * GRD for build changes
   * T for tests
   * DOC for documentation
+  * L10N for changes related to localization
 </details>
 
 Try to keep the summary line of a commit message under 72 characters.
 
 # Project structure
 
-Rust plugin sources are divided into several modules. Almost all modules (except root, `common` and `plugin` ones) support
+Rust plugin sources are divided into several modules. Almost all modules (except root and `plugin` ones) support
 some functionality in particular IDE or integrate with another plugin. Like debugging in CLion or
 integration with `TOML` plugin.
 
@@ -189,11 +183,11 @@ like IDEA and CLion.
 
 The current Rust plugin modules:
 * `:` - root/core module
-* `:common` - shares common code between Rust and Toml plugins
 * `:plugin` - module to build/run/publish Rust plugin
 * `:idea` - contains code available only in IDEA
 * `:clion` - contains code available only in CLion
 * `:debugger` - debugger related code
+* `:profiler` - profiler related code
 * `:toml` - integration with TOML plugin
 * `:intelliLang` - integration with [intelliLang](https://github.com/JetBrains/intellij-community/tree/master/plugins/IntelliLang) plugin
 * `:copyright` - integration with [copyright](https://github.com/JetBrains/intellij-community/tree/master/plugins/copyright) plugin
@@ -202,10 +196,6 @@ The current Rust plugin modules:
 * `:grazie` - integration with [grazie](https://plugins.jetbrains.com/plugin/12175-grazie) plugin 
 * `:js` - interop with JavaScript language
 * `:ml-completion` - integration with [Machine Learning Code Completion](https://github.com/JetBrains/intellij-community/tree/master/plugins/completion-ml-ranking) plugin
-
-The current Toml plugin modules:
-* `:intellij-toml` - module to build/run/publish Toml plugin
-* `:intellij-toml:core` - core module
 
 If you want to implement integration with another plugin/IDE, you should create a new gradle module for that.
 

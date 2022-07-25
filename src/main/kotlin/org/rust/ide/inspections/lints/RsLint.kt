@@ -5,9 +5,9 @@
 
 package org.rust.ide.inspections.lints
 
-import com.intellij.codeInspection.ProblemHighlightType
 import com.intellij.psi.PsiElement
-import org.rust.ide.inspections.lints.RsLintLevel.*
+import org.rust.ide.inspections.lints.RsLintLevel.DENY
+import org.rust.ide.inspections.lints.RsLintLevel.WARN
 import org.rust.lang.core.psi.ext.*
 
 /**
@@ -18,79 +18,26 @@ enum class RsLint(
     private val groupIds: List<String> = emptyList(),
     private val defaultLevel: RsLintLevel = WARN
 ) {
+    // Rustc lints
+    // warnings
     NonSnakeCase("non_snake_case", listOf("bad_style", "nonstandard_style")),
     NonCamelCaseTypes("non_camel_case_types", listOf("bad_style", "nonstandard_style")),
     NonUpperCaseGlobals("non_upper_case_globals", listOf("bad_style", "nonstandard_style")),
-    Deprecated("deprecated") {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.LIKE_DEPRECATED
-                else -> super.toHighlightingType(level)
-            }
-    },
-
-    UnusedVariables("unused_variables", listOf("unused")) {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.LIKE_UNUSED_SYMBOL
-                else -> super.toHighlightingType(level)
-            }
-    },
-
-    UnusedImports("unused_imports", listOf("unused")) {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.LIKE_UNUSED_SYMBOL
-                else -> super.toHighlightingType(level)
-            }
-    },
-
-    WhileTrue("while_true") {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.WEAK_WARNING
-                else -> super.toHighlightingType(level)
-            }
-    },
-
-    NeedlessLifetimes("clippy::needless_lifetimes", listOf("clippy::complexity", "clippy::all", "clippy")) {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.WEAK_WARNING
-                else -> super.toHighlightingType(level)
-            }
-    },
-
+    Deprecated("deprecated"),
+    UnusedVariables("unused_variables", listOf("unused")),
+    UnusedImports("unused_imports", listOf("unused")),
     UnreachablePattern("unreachable_patterns", listOf("unused")),
-
-    UnreachableCode("unreachable_code") {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.LIKE_UNUSED_SYMBOL
-                else -> super.toHighlightingType(level)
-            }
-    },
-
+    WhileTrue("while_true"),
+    UnreachableCode("unreachable_code"),
     BareTraitObjects("bare_trait_objects", listOf("rust_2018_idioms")),
-
-    NonShorthandFieldPatterns("non_shorthand_field_patterns") {
-        override fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-            when (level) {
-                WARN -> ProblemHighlightType.WEAK_WARNING
-                else -> super.toHighlightingType(level)
-            }
-    },
-
-    UnknownCrateTypes("unknown_crate_types", defaultLevel = DENY);
-
-    protected open fun toHighlightingType(level: RsLintLevel): ProblemHighlightType =
-        when (level) {
-            ALLOW -> ProblemHighlightType.INFORMATION
-            WARN -> ProblemHighlightType.WARNING
-            DENY, FORBID -> ProblemHighlightType.GENERIC_ERROR
-        }
-
-    fun getProblemHighlightType(element: PsiElement): ProblemHighlightType = toHighlightingType(levelFor(element))
+    NonShorthandFieldPatterns("non_shorthand_field_patterns"),
+    UnusedQualifications("unused_qualifications", listOf("unused")),
+    UnusedMustUse("unused_must_use", listOf("unused")),
+    // errors
+    UnknownCrateTypes("unknown_crate_types", defaultLevel = DENY),
+    // CLippy lints
+    NeedlessLifetimes("clippy::needless_lifetimes", listOf("clippy::complexity", "clippy::all", "clippy")),
+    DoubleMustUse("clippy::double_must_use", listOf("clippy::style", "clippy::all", "clippy"));
 
     /**
      * Returns the level of the lint for the given PSI element.
@@ -101,13 +48,11 @@ enum class RsLint(
         .filterIsInstance<RsDocAndAttributeOwner>()
         .flatMap { it.queryAttributes.metaItems.toList().asReversed().asSequence() }
         .filter { it.metaItemArgs?.metaItemList.orEmpty().any { item -> item.id == id || item.id in groupIds } }
-        .mapNotNull { it.name?.let { name -> RsLintLevel.valueForId(name) } }
-        .firstOrNull()
+        .firstNotNullOfOrNull { it.name?.let { name -> RsLintLevel.valueForId(name) } }
 
     private fun superModsLevel(el: PsiElement): RsLintLevel? = el.ancestors
         .filterIsInstance<RsMod>()
         .lastOrNull()
         ?.superMods
-        ?.mapNotNull { explicitLevel(it) }
-        ?.firstOrNull()
+        ?.firstNotNullOfOrNull { explicitLevel(it) }
 }

@@ -28,9 +28,8 @@ import org.rust.openapiext.testAssert
 import org.rust.stdext.nextOrNull
 
 interface RsDocAndAttributeOwner : RsElement, NavigatablePsiElement, RsAttributeOwnerPsiOrStub<RsMetaItem> {
-    @JvmDefault
     override val rawMetaItems: Sequence<RsMetaItem>
-        get() = RsInnerAttributeOwnerRegistry.rawMetaItemsForPsi(this)
+        get() = RsInnerAttributeOwnerRegistry.rawMetaItems(this)
 }
 
 interface RsInnerAttributeOwner : RsDocAndAttributeOwner {
@@ -39,9 +38,8 @@ interface RsInnerAttributeOwner : RsDocAndAttributeOwner {
      * In contrast, inner attributes can be either direct
      * children or grandchildren.
      */
-    @JvmDefault
     val innerAttrList: List<RsInnerAttr>
-        get() = RsInnerAttributeOwnerRegistry.innerAttrsForPsi(this)
+        get() = RsInnerAttributeOwnerRegistry.innerAttrs(this)
 }
 
 /**
@@ -63,9 +61,11 @@ interface RsInnerAttributeOwner : RsDocAndAttributeOwner {
  * ```
  */
 interface RsOuterAttributeOwner : RsDocAndAttributeOwner {
-    @JvmDefault
     val outerAttrList: List<RsOuterAttr>
         get() = stubChildrenOfType()
+
+    override val rawOuterMetaItems: Sequence<RsMetaItem>
+        get() = outerAttrList.asSequence().map { it.metaItem }
 }
 
 object RsInnerAttributeOwnerRegistry {
@@ -80,13 +80,13 @@ object RsInnerAttributeOwnerRegistry {
 
     private val attrsElementSet = tokenSetOf(RsElementTypes.OUTER_ATTR, RsElementTypes.INNER_ATTR)
 
-    fun innerAttrsForPsi(psi: RsInnerAttributeOwner): List<RsInnerAttr> = when (val info = reg[psi.elementType]) {
+    fun innerAttrs(psi: RsInnerAttributeOwner): List<RsInnerAttr> = when (val info = reg[psi.elementType]) {
         AttrInfo.Direct -> psi.stubChildrenOfType()
         is AttrInfo.Nested -> psi.stubChildOfElementType(info.elementType)?.stubChildrenOfType<RsInnerAttr>().orEmpty()
         null -> error("Inner attributes for type $psi are not registered")
     }
 
-    private fun allAttrsForPsi(psi: RsDocAndAttributeOwner): Sequence<RsAttr> = when (reg[psi.elementType]) {
+    private fun allAttrs(psi: RsDocAndAttributeOwner): Sequence<RsAttr> = when (reg[psi.elementType]) {
         null, AttrInfo.Direct -> {
             psi.stubChildrenOfType<RsAttr>().asSequence()
         }
@@ -96,18 +96,18 @@ object RsInnerAttributeOwnerRegistry {
         }
     }
 
-    fun rawMetaItemsForPsi(psi: RsDocAndAttributeOwner): Sequence<RsMetaItem> =
-        allAttrsForPsi(psi).map { it.metaItem }
+    fun rawMetaItems(psi: RsDocAndAttributeOwner): Sequence<RsMetaItem> =
+        allAttrs(psi).map { it.metaItem }
 
-    private fun <S> allAttrsForStub(stub: S): Sequence<StubElement<*>> where S : StubBase<*>,
-                                                                             S : RsAttributeOwnerStub {
+    private fun <S> allAttrs(stub: S): Sequence<StubElement<*>> where S : StubBase<*>,
+                                                                      S : RsAttributeOwnerStub {
         return when (val info = reg[stub.stubType]) {
             null, AttrInfo.Direct -> {
                 stub.childrenStubs.asSequence().filter { it.stubType in attrsElementSet }
             }
             is AttrInfo.Nested -> {
                 val childrenStubs = stub.childrenStubs
-                val outer = childrenStubs.asSequence().filter { it.stubType == RsElementTypes.OUTER_ATTR }
+                val outer = filterOuterAttrs(childrenStubs)
                 val inner = childrenStubs
                     .find { it.stubType == info.elementType }
                     ?.childrenStubs
@@ -119,17 +119,30 @@ object RsInnerAttributeOwnerRegistry {
         }
     }
 
-    fun <S> rawMetaItemsForStub(stub: S): Sequence<RsMetaItemStub> where S : StubBase<*>,
-                                                                         S : RsAttributeOwnerStub {
-        val attrs = allAttrsForStub(stub)
-        return attrs.mapNotNull { it.findChildStubByType(RsMetaItemStub.Type) }
+    fun <S> rawMetaItems(stub: S): Sequence<RsMetaItemStub> where S : StubBase<*>,
+                                                                  S : RsAttributeOwnerStub {
+        return allAttrs(stub).mapToMetaItems()
     }
+
+    fun <S> rawOuterMetaItems(stub: S): Sequence<RsMetaItemStub> where S : StubBase<*>,
+                                                                       S : RsAttributeOwnerStub {
+        return filterOuterAttrs(stub.childrenStubs).mapToMetaItems()
+    }
+
+    private fun filterOuterAttrs(childrenStubs: List<StubElement<PsiElement>>): Sequence<StubElement<PsiElement>> =
+        childrenStubs.asSequence().filter { it.stubType == RsElementTypes.OUTER_ATTR }
+
+    private fun Sequence<StubElement<*>>.mapToMetaItems(): Sequence<RsMetaItemStub> =
+        mapNotNull { it.findChildStubByType(RsMetaItemStub.Type) }
 
     private sealed class AttrInfo {
         object Direct : AttrInfo()
         class Nested(val elementType: IElementType) : AttrInfo()
     }
 }
+
+fun RsDocAndAttributeOwner.findFirstMetaItem(name: String): RsMetaItem? =
+    rawMetaItems.find { it.name == name }
 
 /**
  * Find the first outer attribute with the given identifier.
@@ -168,36 +181,60 @@ val RsDocAndAttributeOwner.queryAttributes: QueryAttributes<RsMetaItem>
 /** [explicitCrate] is passed to avoid resolve triggering */
 fun RsDocAndAttributeOwner.getQueryAttributes(
     explicitCrate: Crate?,
-    stub: RsAttributeOwnerStub? = attributeStub
+    stub: RsAttributeOwnerStub? = attributeStub,
+    outerAttrsOnly: Boolean = false
 ): QueryAttributes<RsMetaItem> {
     testAssert { !DumbService.isDumb(project) }
     return if (stub != null) {
-        QueryAttributes(stub.getQueryAttributes(explicitCrate).metaItems.map { it.psi })
+        QueryAttributes(stub.getQueryAttributes(explicitCrate, outerAttrsOnly).metaItems.map { it.psi })
     } else {
-        getExpandedAttributesNoStub(explicitCrate)
+        getExpandedAttributesNoStub(explicitCrate, outerAttrsOnly)
     }
 }
 
 /** [explicitCrate] is passed to avoid resolve triggering */
+fun <T : RsMetaItemPsiOrStub> RsAttributeOwnerPsiOrStub<T>.getQueryAttributes(
+    explicitCrate: Crate?,
+    stub: RsAttributeOwnerStub?,
+    outerAttrsOnly: Boolean = false
+): QueryAttributes<T> {
+    @Suppress("UNCHECKED_CAST")
+    return if (this is RsAttributeOwnerStub) {
+        getQueryAttributes(explicitCrate, outerAttrsOnly)
+    } else {
+        (this as RsDocAndAttributeOwner).getQueryAttributes(explicitCrate, stub, outerAttrsOnly)
+    } as QueryAttributes<T>
+}
+
+/** [explicitCrate] is passed to avoid resolve triggering */
 fun RsAttributeOwnerStub.getQueryAttributes(
-    explicitCrate: Crate?
+    explicitCrate: Crate?,
+    outerAttrsOnly: Boolean = false
 ): QueryAttributes<RsMetaItemStub> {
     return when {
         // No attributes - return empty sequence
         !hasAttrs -> QueryAttributes.empty()
 
         // No `#[cfg_attr()]` attributes - return attributes without `cfg_attr` expansion
-        !hasCfgAttr -> rawAttributes
+        !hasCfgAttr -> QueryAttributes(if (outerAttrsOnly) rawOuterMetaItems else rawMetaItems)
 
         // Slow path. There are `#[cfg_attr()]` attributes - expand them and return expanded attributes
-        else -> getExpandedAttributesNoStub(explicitCrate)
+        else -> getExpandedAttributesNoStub(explicitCrate, outerAttrsOnly)
     }
 }
 
 /** [explicitCrate] is passed to avoid resolve triggering */
-private fun <T : RsMetaItemPsiOrStub> RsAttributeOwnerPsiOrStub<T>.getExpandedAttributesNoStub(explicitCrate: Crate?): QueryAttributes<T> {
-    if (!CFG_ATTRIBUTES_ENABLED_KEY.asBoolean()) return rawAttributes
-    val crate = explicitCrate ?: containingCrate ?: return rawAttributes
+private fun <T : RsMetaItemPsiOrStub> RsAttributeOwnerPsiOrStub<T>.getExpandedAttributesNoStub(
+    explicitCrate: Crate?,
+    outerAttrsOnly: Boolean = false
+): QueryAttributes<T> {
+    val rawMetaItems = if (outerAttrsOnly) {
+        rawOuterMetaItems
+    } else {
+        rawMetaItems
+    }
+    if (!CFG_ATTRIBUTES_ENABLED_KEY.asBoolean()) return QueryAttributes(rawMetaItems)
+    val crate = explicitCrate ?: containingCrate ?: return QueryAttributes(rawMetaItems)
     val evaluator = CfgEvaluator.forCrate(crate)
     return QueryAttributes(evaluator.expandCfgAttrs(rawMetaItems))
 }
@@ -394,16 +431,24 @@ class QueryAttributes<out T: RsMetaItemPsiOrStub>(
  *
  * HACK: do not check on [RsFile] as [RsFile.queryAttributes] would access the PSI
  */
-val RsDocAndAttributeOwner.isEnabledByCfgSelf: Boolean
-    get() = evaluateCfg() != ThreeValuedLogic.False
+val RsDocAndAttributeOwner.isEnabledByCfgSelfOrInAttrProcMacroBody: Boolean
+    get() = isEnabledByCfgSelfOrInAttrProcMacroBody(null)
+
+fun RsDocAndAttributeOwner.isEnabledByCfgSelfOrInAttrProcMacroBody(crate: Crate?): Boolean {
+    if (getCodeStatus(crate) == RsCodeStatus.ATTR_PROC_MACRO_CALL) return true
+    return evaluateCfg() != ThreeValuedLogic.False
+}
 
 /**
- * TODO at the moment it's equivalent to [isEnabledByCfgSelf]
- *
- * Returns `true` if it [isEnabledByCfgSelf] and is not under attribute procedural macro
+ * Returns `true` if it [isEnabledByCfgSelfOrInAttrProcMacroBody] and is not under attribute procedural macro
  */
 val RsDocAndAttributeOwner.existsAfterExpansionSelf: Boolean
-    get() = isEnabledByCfgSelf
+    get() = existsAfterExpansionSelf(null)
+
+fun RsDocAndAttributeOwner.existsAfterExpansionSelf(crate: Crate?): Boolean =
+    evaluateCfg(crate) != ThreeValuedLogic.False &&
+        (this !is RsAttrProcMacroOwner ||
+            ProcMacroAttribute.getProcMacroAttribute(this, explicitCrate = crate) !is ProcMacroAttribute.Attr)
 
 fun RsDocAndAttributeOwner.isEnabledByCfgSelf(crate: Crate): Boolean =
     isEnabledByCfgSelfInner(crate)
@@ -421,19 +466,23 @@ fun RsAttributeOwnerStub.isEnabledByCfgSelf(crate: Crate): Boolean {
 }
 
 /** [crateOrNull] is passed to avoid trigger resolve */
-private fun RsAttributeOwnerPsiOrStub<*>.evaluateCfg(crateOrNull: Crate? = null): ThreeValuedLogic {
+fun RsAttributeOwnerPsiOrStub<*>.evaluateCfg(crateOrNull: Crate? = null): ThreeValuedLogic {
+    val lazyEvaluator = if (crateOrNull != null) LazyCfgEvaluator.LazyForCrate(crateOrNull) else LazyCfgEvaluator.Lazy
+    return evaluateCfg(lazyEvaluator)
+}
+
+fun RsAttributeOwnerPsiOrStub<*>.evaluateCfg(lazyEvaluator: LazyCfgEvaluator): ThreeValuedLogic {
     if (!CFG_ATTRIBUTES_ENABLED_KEY.asBoolean()) return ThreeValuedLogic.True
 
     // We return true because otherwise we have recursion cycle:
     // [RsFile.crate] -> [RsFile.cachedData] -> [RsFile.declaration] ->
     //  -> [RsModDeclItem.resolve] -> [RsFile.isEnabledByCfg] -> [RsFile.crate]
-    if (crateOrNull == null && this is RsFile) return ThreeValuedLogic.True
+    if (lazyEvaluator is LazyCfgEvaluator.Lazy && this is RsFile) return ThreeValuedLogic.True
 
     val attributeStub = if (this is RsDocAndAttributeOwner) attributeStub else this as RsAttributeOwnerStub
     if (attributeStub?.mayHaveCfg == false) return ThreeValuedLogic.True
 
-    val crate = crateOrNull ?: containingCrate ?: return ThreeValuedLogic.True // TODO: maybe unknown?
-    val evaluator = CfgEvaluator.forCrate(crate)
+    val evaluator = lazyEvaluator.createEvaluator(this) ?: return ThreeValuedLogic.True // TODO: maybe unknown?
 
     val rawMetaItems = attributeStub?.rawMetaItems ?: rawMetaItems
 
@@ -446,6 +495,29 @@ private fun RsAttributeOwnerPsiOrStub<*>.evaluateCfg(crateOrNull: Crate? = null)
     ).cfgAttributes
 
     return evaluator.evaluate(cfgAttributes)
+}
+
+sealed class LazyCfgEvaluator {
+    abstract fun createEvaluator(element: RsAttributeOwnerPsiOrStub<*>): CfgEvaluator?
+
+    object Lazy: LazyCfgEvaluator() {
+        override fun createEvaluator(element: RsAttributeOwnerPsiOrStub<*>): CfgEvaluator? {
+            val crate = element.containingCrate ?: return null
+            return CfgEvaluator.forCrate(crate)
+        }
+    }
+
+    class LazyForCrate(private val crate: Crate): LazyCfgEvaluator() {
+        override fun createEvaluator(element: RsAttributeOwnerPsiOrStub<*>): CfgEvaluator {
+            return CfgEvaluator.forCrate(crate)
+        }
+    }
+
+    class NonLazy(private val evaluator: CfgEvaluator): LazyCfgEvaluator() {
+        override fun createEvaluator(element: RsAttributeOwnerPsiOrStub<*>): CfgEvaluator {
+            return evaluator
+        }
+    }
 }
 
 private val CFG_ATTRIBUTES_ENABLED_KEY = Registry.get("org.rust.lang.cfg.attributes")

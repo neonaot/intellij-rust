@@ -19,7 +19,6 @@ import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.workspace.PackageOrigin.*
 import org.rust.cargo.toolchain.impl.RustcVersion
 import org.rust.ide.icons.RsIcons
-import org.rust.openapiext.checkReadAccessAllowed
 import org.rust.stdext.buildList
 import org.rust.stdext.exhaustive
 import javax.swing.Icon
@@ -47,12 +46,26 @@ class CargoLibrary(
     override fun getPresentableText(): String = if (version != null) "$name $version" else name
 }
 
-class RsAdditionalLibraryRootsProvider : AdditionalLibraryRootsProvider() {
-    override fun getAdditionalProjectLibraries(project: Project): Collection<CargoLibrary> {
-        checkReadAccessAllowed()
-        return project.cargoProjects.allProjects
-            .smartFlatMap { it.ideaLibraries }
+class GeneratedCodeFakeLibrary(private val sourceRoots: Set<VirtualFile>) : SyntheticLibrary() {
+    override fun equals(other: Any?): Boolean {
+        return other is GeneratedCodeFakeLibrary && other.sourceRoots == sourceRoots
     }
+
+    override fun hashCode(): Int = sourceRoots.hashCode()
+    override fun getSourceRoots(): Collection<VirtualFile> = sourceRoots
+    override fun isShowInExternalLibrariesNode(): Boolean = false
+
+    companion object {
+        fun create(cargoProject: CargoProject): GeneratedCodeFakeLibrary? {
+            val generatedRoots = cargoProject.workspace?.packages.orEmpty().mapNotNullTo(HashSet()) { it.outDir }
+            return if (generatedRoots.isEmpty()) null else GeneratedCodeFakeLibrary(generatedRoots)
+        }
+    }
+}
+
+class RsAdditionalLibraryRootsProvider : AdditionalLibraryRootsProvider() {
+    override fun getAdditionalProjectLibraries(project: Project): Collection<SyntheticLibrary> =
+        project.cargoProjects.allProjects.smartFlatMap { it.ideaLibraries }
 
     override fun getRootsToWatch(project: Project): Collection<VirtualFile> =
         getAdditionalProjectLibraries(project).flatMap { it.sourceRoots }
@@ -65,7 +78,7 @@ private fun <U, V> Collection<U>.smartFlatMap(transform: (U) -> Collection<V>): 
         else -> this.flatMap(transform)
     }
 
-private val CargoProject.ideaLibraries: Collection<CargoLibrary>
+private val CargoProject.ideaLibraries: Collection<SyntheticLibrary>
     get() {
         val workspace = workspace ?: return emptyList()
         val stdlibPackages = mutableListOf<CargoWorkspace.Package>()
@@ -83,6 +96,7 @@ private val CargoProject.ideaLibraries: Collection<CargoLibrary>
             for (pkg in dependencyPackages) {
                 pkg.toCargoLibrary()?.let(this::add)
             }
+            GeneratedCodeFakeLibrary.create(this@ideaLibraries)?.let(::add)
         }
     }
 

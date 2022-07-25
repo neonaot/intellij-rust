@@ -111,20 +111,18 @@ object RsPsiPattern {
      */
     val nonStdOuterAttributeMetaItem: PsiElementPattern.Capture<RsMetaItem> =
         psiElement<RsMetaItem>()
-            .with("nonBuiltinAttributeCondition") { e -> e.name !in RS_BUILTIN_ATTRIBUTES }
-            .with(RootMetaItemCondition)
-            .with("RsOuterAttr") { _, context ->
-                context?.get(META_ITEM_ATTR) is RsOuterAttr
-            }
+            .with("nonBuiltinAttributeCondition") { e -> e.canBeMacroCall }
 
     val lintAttributeMetaItem: PsiElementPattern.Capture<RsMetaItem> =
         rootMetaItem
             .with("lintAttributeCondition") { e -> e.name in LINT_ATTRIBUTES }
 
-    val includeMacroLiteral: PsiElementPattern.Capture<RsLitExpr> = psiElement<RsLitExpr>()
+    val literal: PsiElementPattern.Capture<RsLitExpr> = psiElement<RsLitExpr>()
+
+    val includeMacroLiteral: PsiElementPattern.Capture<RsLitExpr> = literal
         .withParent(psiElement<RsIncludeMacroArgument>())
 
-    val pathAttrLiteral: PsiElementPattern.Capture<RsLitExpr> = psiElement<RsLitExpr>()
+    val pathAttrLiteral: PsiElementPattern.Capture<RsLitExpr> = literal
         .withParent(
             rootMetaItem("path", psiElement<RsModDeclItem>() or psiElement<RsModItem>())
         )
@@ -337,7 +335,7 @@ inline infix fun <reified I : PsiElement> ElementPattern<out I>.or(pattern: Elem
     return psiElement<I>().andOr(this, pattern)
 }
 
-private val PsiElement.prevVisibleOrNewLine: PsiElement?
+val PsiElement.prevVisibleOrNewLine: PsiElement?
     get() = leftLeaves
         .filterNot { it is PsiComment || it is PsiErrorElement }
         .filter { it !is PsiWhiteSpace || it.textContains('\n') }
@@ -357,12 +355,12 @@ fun <T : PsiElement, Self : PsiElementPattern<T, Self>> PsiElementPattern<T, Sel
     pattern.accepts(sibling)
 }
 
-fun <T, Self : ObjectPattern<T, Self>> ObjectPattern<T, Self>.with(name: String, cond: (T) -> Boolean): Self =
+fun <T : Any, Self : ObjectPattern<T, Self>> ObjectPattern<T, Self>.with(name: String, cond: (T) -> Boolean): Self =
     with(object : PatternCondition<T>(name) {
         override fun accepts(t: T, context: ProcessingContext?): Boolean = cond(t)
     })
 
-fun <T, Self : ObjectPattern<T, Self>> ObjectPattern<T, Self>.with(name: String, cond: (T, ProcessingContext?) -> Boolean): Self =
+fun <T : Any, Self : ObjectPattern<T, Self>> ObjectPattern<T, Self>.with(name: String, cond: (T, ProcessingContext?) -> Boolean): Self =
     with(object : PatternCondition<T>(name) {
         override fun accepts(t: T, context: ProcessingContext?): Boolean = cond(t, context)
     })

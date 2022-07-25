@@ -8,18 +8,20 @@ package org.rust.lang.utils
 import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.codeInspection.InspectionManager
 import com.intellij.codeInspection.LocalQuickFix
-import com.intellij.codeInspection.LocalQuickFixAndIntentionActionOnPsiElement
 import com.intellij.codeInspection.ProblemHighlightType
+import com.intellij.codeInspection.util.InspectionMessage
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
-import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.colors.TextAttributesKey
-import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.NlsContexts.Tooltip
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.util.text.StringUtil.pluralize
 import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFile
+import com.intellij.util.ThreeState
 import com.intellij.xml.util.XmlStringUtil.escapeString
+import org.rust.cargo.project.workspace.PackageOrigin
+import org.rust.cargo.toolchain.RustChannel
+import org.rust.cargo.toolchain.impl.RustcVersion
 import org.rust.ide.annotator.RsAnnotationHolder
 import org.rust.ide.annotator.RsErrorAnnotator
 import org.rust.ide.annotator.fixes.*
@@ -36,14 +38,12 @@ import org.rust.ide.presentation.shortPresentableText
 import org.rust.ide.refactoring.implementMembers.ImplementMembersFix
 import org.rust.ide.utils.checkMatch.Pattern
 import org.rust.ide.utils.import.RsImportHelper.getTypeReferencesInfoFromTys
-import org.rust.lang.core.CONST_GENERICS
-import org.rust.lang.core.CompilerFeature
-import org.rust.lang.core.MIN_CONST_GENERICS
+import org.rust.lang.core.*
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.ImplLookup
 import org.rust.lang.core.resolve.KnownItems
-import org.rust.lang.core.stubs.index.RsFeatureIndex
+import org.rust.lang.core.resolve.Namespace
 import org.rust.lang.core.types.*
 import org.rust.lang.core.types.infer.*
 import org.rust.lang.core.types.ty.*
@@ -130,7 +130,7 @@ sealed class RsDiagnostic(
                         add(ConvertToOwnedTyFix(element, expectedTy))
                     }
                     val stringTy = items.String.asTy()
-                    if (expectedTy == stringTy
+                    if (expectedTy.isEquivalentTo(stringTy)
                         && (isToStringImplForActual(items, lookup) || isActualTyNumeric())) {
                         add(ConvertToStringFix(element))
                     } else if (expectedTy is TyReference) {
@@ -157,17 +157,17 @@ sealed class RsDiagnostic(
                         }
                     } else if (expectedTy is TyAdt && expectedTy.item == items.Result) {
                         val (expOkTy, expErrTy) = expectedTy.typeArguments
-                        if (expErrTy == errTyOfTryFromActualImplForTy(expOkTy, items, lookup)) {
+                        if (expErrTy.isEquivalentTo(errTyOfTryFromActualImplForTy(expOkTy, items, lookup))) {
                             add(ConvertToTyUsingTryFromTraitFix(element, expOkTy))
                         }
-                        if (expErrTy == ifActualIsStrGetErrTyOfFromStrImplForTy(expOkTy, items, lookup)) {
+                        if (expErrTy.isEquivalentTo(ifActualIsStrGetErrTyOfFromStrImplForTy(expOkTy, items, lookup))) {
                             add(ConvertToTyUsingFromStrFix(element, expOkTy))
                         }
                     }
-                    if (actualTy == stringTy) {
-                        if (expectedTy == REF_STR_TY) {
+                    if (actualTy.isEquivalentTo(stringTy)) {
+                        if (expectedTy.isEquivalentTo(REF_STR_TY)) {
                             add(ConvertToImmutableStrFix(element))
-                        } else if (expectedTy == MUT_REF_STR_TY) {
+                        } else if (expectedTy.isEquivalentTo(MUT_REF_STR_TY)) {
                             add(ConvertToMutStrFix(element))
                         }
                     }
@@ -197,16 +197,20 @@ sealed class RsDiagnostic(
         private fun ifActualIsStrGetErrTyOfFromStrImplForTy(ty: Ty, items: KnownItems, lookup: ImplLookup): Ty? {
             if (lookup.coercionSequence(actualTy).lastOrNull() !is TyStr) return null
             val fromStr = items.FromStr ?: return null
-            val result = lookup.selectProjectionStrict(TraitRef(ty, BoundElement(fromStr)),
-                fromStr.findAssociatedType("Err") ?: return null)
+            val result = lookup.selectProjectionStrict(
+                TraitRef(ty, BoundElement(fromStr)),
+                fromStr.findAssociatedType("Err") ?: return null
+            )
             return result.ok()?.value
         }
 
         private fun isToOwnedImplWithExpectedForActual(items: KnownItems, lookup: ImplLookup): Boolean {
             val toOwnedTrait = items.ToOwned ?: return false
-            val result = lookup.selectProjectionStrictWithDeref(TraitRef(actualTy, BoundElement(toOwnedTrait)),
-                toOwnedTrait.findAssociatedType("Owned") ?: return false)
-            return expectedTy == result.ok()?.value
+            val result = lookup.selectProjectionStrictWithDeref(
+                TraitRef(actualTy, BoundElement(toOwnedTrait)),
+                toOwnedTrait.findAssociatedType("Owned") ?: return false
+            )
+            return expectedTy.isEquivalentTo(result.ok()?.value)
         }
 
         private fun isToStringImplForActual(items: KnownItems, lookup: ImplLookup): Boolean {
@@ -540,6 +544,24 @@ sealed class RsDiagnostic(
         )
     }
 
+    class ConstItemReferToStaticError(element: RsElement, val constContext: RsConstContextKind) : RsDiagnostic(element) {
+        override fun prepare() = PreparedAnnotation(
+            ERROR,
+            E0013,
+            when (constContext) {
+                is RsConstContextKind.Constant -> "Const `${constContext.psi.name.orEmpty()}` cannot refer to static " +
+                    "`${element.text}`"
+                is RsConstContextKind.ConstFn -> "Constant function `${constContext.psi.name.orEmpty()}` cannot refer " +
+                    "to static `${element.text}`"
+                is RsConstContextKind.EnumVariantDiscriminant -> "Enum variant `${constContext.psi.name.orEmpty()}`'s " +
+                    "discriminant value cannot refer to static `${element.text}`"
+                RsConstContextKind.ArraySize -> "Array size cannot refer to static `${element.text}`"
+                RsConstContextKind.ConstGenericArgument -> "Const generic argument cannot refer to static " +
+                    "`${element.text}`"
+            }
+        )
+    }
+
     class IncorrectFunctionArgumentCountError(
         element: PsiElement,
         private val expectedCount: Int,
@@ -778,7 +800,7 @@ sealed class RsDiagnostic(
         }
     }
 
-    class DuplicateDefinitionError(
+    class DuplicateAssociatedItemError(
         element: PsiElement,
         private val fieldName: String
     ) : RsDiagnostic(element) {
@@ -793,45 +815,50 @@ sealed class RsDiagnostic(
         }
     }
 
-    class DuplicateItemError(
+    /**
+     * [E0428] - item            vs    item
+     * [E0255] - item            vs    import
+     * [E0260] - item            vs    extern crate
+     * [E0252] - import          vs    import
+     * [E0254] - import          vs    extern crate
+     * [E0259] - extern crate    vs    extern crate
+     */
+    class DuplicateDefinitionError private constructor(
         element: PsiElement,
         private val itemType: String,
-        private val fieldName: String,
-        private val scopeType: String
+        private val itemName: String,
+        private val scopeType: String,
+        private val errorCode: RsErrorCode,
     ) : RsDiagnostic(element) {
-        override fun prepare() = PreparedAnnotation(
-            ERROR,
-            E0428,
-            errorText()
-        )
 
-        private fun errorText(): String {
-            return "A $itemType named `$fieldName` has already been defined in this $scopeType"
+        constructor(
+            element: PsiElement,
+            itemNamespace: Namespace,
+            itemName: String,
+            scope: PsiElement,
+            errorCode: RsErrorCode,
+        ) : this(element, itemNamespace.itemName, itemName, scope.formatScope(), errorCode)
+
+        override fun prepare() = PreparedAnnotation(ERROR, errorCode, errorText())
+
+        private fun errorText(): String = when {
+            element.ancestorOrSelf<RsUseSpeck>() != null ->
+                "A second item with name `$itemName` imported. Try to use an alias."
+            errorCode == E0259 ->
+                "A second extern crate with name `$itemName` imported"
+            else ->
+                "A $itemType named `$itemName` has already been defined in this $scopeType"
         }
-    }
 
-    class DuplicateImportError(
-        element: PsiElement
-    ) : RsDiagnostic(element) {
-        override fun prepare() = PreparedAnnotation(
-            ERROR,
-            E0252,
-            errorText()
-        )
-
-        private fun errorText(): String {
-            return "A second item with name '${element.text}' imported. Try to use an alias."
+        companion object {
+            private fun PsiElement.formatScope(): String =
+                when (this) {
+                    is RsBlock -> "block"
+                    is RsMod, is RsForeignModItem -> "module"
+                    is RsTraitItem -> "trait"
+                    else -> "scope"
+                }
         }
-    }
-
-    class AssociatedTypeInInherentImplError(
-        element: PsiElement
-    ) : RsDiagnostic(element) {
-        override fun prepare() = PreparedAnnotation(
-            ERROR,
-            E0202,
-            "Associated types are not allowed in inherent impls"
-        )
     }
 
     class ImplSizedError(
@@ -1029,7 +1056,7 @@ sealed class RsDiagnostic(
         }
     }
 
-    class WrongNumberOfTypeArguments(
+    class WrongNumberOfGenericArguments(
         element: PsiElement,
         private val errorText: String,
         private val fixes: List<LocalQuickFix>
@@ -1040,6 +1067,29 @@ sealed class RsDiagnostic(
                 E0107,
                 errorText,
                 fixes = fixes
+            )
+        }
+    }
+
+    class WrongOrderOfGenericArguments(
+        element: PsiElement,
+        private val errorText: String,
+        private val fixes: List<LocalQuickFix>
+    ) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0747,
+            errorText,
+            fixes = fixes
+        )
+    }
+
+    class WrongNumberOfGenericParameters(element: PsiElement, private val errorText: String) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation {
+            return PreparedAnnotation(
+                ERROR,
+                E0049,
+                errorText
             )
         }
     }
@@ -1101,6 +1151,14 @@ sealed class RsDiagnostic(
         )
     }
 
+    class VisibilityRestrictionMustBeAncestorModule(element: PsiElement) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0742,
+            "Visibilities can only be restricted to ancestor modules",
+        )
+    }
+
     class ModuleNotFound(
         private val modDecl: RsModDeclItem
     ) : RsDiagnostic(modDecl.identifier) {
@@ -1121,7 +1179,7 @@ sealed class RsDiagnostic(
             E0004,
             "Match must be exhaustive",
             fixes = listOfNotNull(
-                AddRemainingArmsFix(matchExpr, patterns),
+                AddRemainingArmsFix(matchExpr, patterns).takeIf { patterns.isNotEmpty() },
                 AddWildcardArmFix(matchExpr).takeIf { matchExpr.arms.isNotEmpty() }
             )
         )
@@ -1150,6 +1208,17 @@ sealed class RsDiagnostic(
             ERROR,
             E0732,
             "`#[repr(inttype)]` must be specified"
+        )
+    }
+
+    class NonStructuralMatchTypeAsConstGenericParameter(
+        element: PsiElement,
+        private val typeName: String
+    ) : RsDiagnostic(element) {
+        override fun prepare() = PreparedAnnotation(
+            ERROR,
+            E0741,
+            "$typeName doesn't derive both `PartialEq` and `Eq`"
         )
     }
 
@@ -1316,8 +1385,9 @@ sealed class RsDiagnostic(
         )
     }
 
-    class ReprAttrUnsupportedItem(element: PsiElement,
-                                  private val errorText: String
+    class ReprAttrUnsupportedItem(
+        element: PsiElement,
+        private val errorText: String
     ) : RsDiagnostic(element) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
@@ -1327,8 +1397,9 @@ sealed class RsDiagnostic(
         )
     }
 
-    class UnrecognizedReprAttribute(element: PsiElement,
-                                    private val reprName: String
+    class UnrecognizedReprAttribute(
+        element: PsiElement,
+        private val reprName: String
     ) : RsDiagnostic(element) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
@@ -1351,15 +1422,11 @@ sealed class RsDiagnostic(
         )
     }
 
-    class ForbiddenConstGenericType(
-        private val typeReference: RsTypeReference
-    ) : RsDiagnostic(typeReference) {
+    class DefaultsConstGenericNotAllowed(expr: RsExpr) : RsDiagnostic(expr) {
         override fun prepare(): PreparedAnnotation = PreparedAnnotation(
             ERROR,
             null,
-            "the only supported types are integers, `bool` and `char`",
-            "`${typeReference.text}` is forbidden as the type of a const generic parameter",
-            fixes = listOf(createAddOrReplaceFeatureFix(typeReference, CONST_GENERICS, MIN_CONST_GENERICS))
+            "Defaults for const parameters are only allowed in `struct`, `enum`, `type`, or `trait` definitions",
         )
     }
 
@@ -1391,17 +1458,99 @@ sealed class RsDiagnostic(
             fixes = fixes
         )
     }
+
+    class InvalidAbi(
+        element: RsLitExpr,
+        private val abiName: String
+    ) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0703,
+            "Invalid ABI: found $abiName",
+            description = "valid ABIs: ${SUPPORTED_CALLING_CONVENTIONS.keys.joinToString(", ")}",
+            fixes = createSuggestionFixes()
+        )
+
+        private fun createSuggestionFixes(): List<NameSuggestionFix<PsiElement>> {
+            val factory = RsPsiFactory(element.project)
+            return NameSuggestionFix.createApplicable(element, abiName, SUPPORTED_CALLING_CONVENTIONS.keys.toList(), 2) {
+                factory.createExpression("\"$it\"")
+            }
+        }
+    }
+
+    class FeatureAttributeInNonNightlyChannel(
+        element: PsiElement,
+        private val channelName: String,
+        private val quickFix: RemoveElementFix?
+    ) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0554,
+            "`#![feature]` may not be used on the $channelName release channel",
+            fixes = listOfNotNull(quickFix)
+        )
+    }
+
+    class InvalidConstGenericArgument(expr: RsExpr) : RsDiagnostic(expr) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            null,
+            "Expressions must be enclosed in braces to be used as const generic arguments",
+            fixes = listOf(EncloseExprInBracesFix(element as RsExpr))
+        )
+    }
+
+    class IllegalLifetimeName(element: PsiElement) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            null,
+            "Lifetimes cannot use keyword names"
+        )
+    }
+
+    class InvalidLabelName(element: PsiElement, private val labelName: String) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            null,
+            "Invalid label name `$labelName`"
+        )
+    }
+
+    class SelfImportNotInUseGroup(element: PsiElement) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0429,
+            "`self` imports are only allowed within a { } list",
+        )
+    }
+
+    class DuplicateSelfInUseGroup(element: PsiElement) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0430,
+            "The `self` import appears more than once in the list",
+        )
+    }
+
+    class SelfImportInUseGroupWithEmptyPrefix(element: PsiElement) : RsDiagnostic(element) {
+        override fun prepare(): PreparedAnnotation = PreparedAnnotation(
+            ERROR,
+            E0431,
+            "`self` import can only appear in an import list with a non-empty prefix",
+        )
+    }
 }
 
 enum class RsErrorCode {
-    E0004, E0015, E0023, E0025, E0026, E0027, E0040, E0046, E0050, E0054, E0057, E0060, E0061, E0069, E0081, E0084,
+    E0004, E0013, E0015, E0023, E0025, E0026, E0027, E0040, E0046, E0049, E0050, E0054, E0057, E0060, E0061, E0069, E0081, E0084,
     E0106, E0107, E0116, E0117, E0118, E0120, E0121, E0124, E0132, E0133, E0184, E0185, E0186, E0198, E0199,
-    E0200, E0201, E0202, E0252, E0261, E0262, E0263, E0267, E0268, E0277,
+    E0200, E0201, E0252, E0254, E0255, E0259, E0260, E0261, E0262, E0263, E0267, E0268, E0277,
     E0308, E0322, E0328, E0364, E0365, E0379, E0384,
-    E0403, E0404, E0407, E0415, E0416, E0424, E0426, E0428, E0433, E0435, E0449, E0451, E0463,
-    E0517, E0518, E0537, E0552, E0562, E0569, E0583, E0586, E0594,
+    E0403, E0404, E0407, E0415, E0416, E0424, E0426, E0428, E0429, E0430, E0431, E0433, E0435, E0449, E0451, E0463,
+    E0517, E0518, E0537, E0552, E0554, E0562, E0569, E0583, E0586, E0594,
     E0601, E0603, E0614, E0616, E0618, E0624, E0658, E0666, E0667, E0688, E0695,
-    E0704, E0732;
+    E0703, E0704, E0732, E0741, E0742, E0747;
 
     val code: String
         get() = toString()
@@ -1416,8 +1565,8 @@ enum class Severity {
 class PreparedAnnotation(
     val severity: Severity,
     val errorCode: RsErrorCode?,
-    val header: String,
-    val description: String = "",
+    @Suppress("UnstableApiUsage") @InspectionMessage val header: String,
+    @Suppress("UnstableApiUsage") @Tooltip val description: String = "",
     val fixes: List<LocalQuickFix> = emptyList(),
     val textAttributes: TextAttributesKey? = null
 )
@@ -1485,9 +1634,8 @@ fun RsDiagnostic.addToHolder(holder: RsProblemsHolder) {
     holder.registerProblem(descriptor)
 }
 
-private val PreparedAnnotation.fullDescription: String get() {
-    return "<html>${htmlHeader(errorCode, escapeString(header))}<br>${escapeString(description)}</html>"
-}
+private val PreparedAnnotation.fullDescription: String
+    get() = "<html>${htmlHeader(errorCode, escapeString(header))}<br>${escapeString(description)}</html>"
 
 private fun Severity.toProblemHighlightType(): ProblemHighlightType = when (this) {
     INFO -> ProblemHighlightType.INFORMATION
@@ -1535,20 +1683,42 @@ private fun getConflictingNames(element: PsiElement, vararg tys: Ty): Set<RsQual
     }
 }
 
-private fun createAddOrReplaceFeatureFix(element: RsElement, newFix: CompilerFeature, oldFix: CompilerFeature): LocalQuickFix {
-    val project = element.project
-    val crateRoot = element.crateRoot
-    val oldAttr = RsFeatureIndex.getFeatureAttributes(project, oldFix.name)
-        .find { it.crateRoot == crateRoot }
-        ?: return AddFeatureAttributeFix(newFix.name, element)
-    return object : LocalQuickFixAndIntentionActionOnPsiElement(element) {
-        override fun getFamilyName(): String = "Replace feature attribute"
-        override fun getText(): String = "Replace `${oldFix.name}` feature with `${newFix.name}` feature"
-        override fun invoke(project: Project, file: PsiFile, editor: Editor?, startElement: PsiElement, endElement: PsiElement) {
-            val psiFactory = RsPsiFactory(project)
-            val attr = psiFactory.createInnerAttr("feature(${newFix.name})")
-            oldAttr.replace(attr)
-        }
-    }
-}
+val SUPPORTED_CALLING_CONVENTIONS = mapOf(
+    "Rust" to null,
+    "C" to null,
+    "C-unwind" to C_UNWIND,
+    "cdecl" to null,
+    "stdcall" to null,
+    "stdcall-unwind" to C_UNWIND,
+    "fastcall" to null,
+    "vectorcall" to ABI_VECTORCALL,
+    "thiscall" to ABI_THISCALL,
+    "thiscall-unwind" to C_UNWIND,
+    "aapcs" to null,
+    "win64" to null,
+    "sysv64" to null,
+    "ptx-kernel" to ABI_PTX,
+    "msp430-interrupt" to ABI_MSP430_INTERRUPT,
+    "x86-interrupt" to ABI_X86_INTERRUPT,
+    "amdgpu-kernel" to ABI_AMDGPU_KERNEL,
+    "efiapi" to ABI_EFIAPI,
+    "avr-interrupt" to ABI_AVR_INTERRUPT,
+    "avr-non-blocking-interrupt" to ABI_AVR_INTERRUPT,
+    "C-cmse-nonsecure-call" to ABI_C_CMSE_NONSECURE_CALL,
+    // TODO: update compiler features and use `WASM_ABI` here
+    "wasm" to null,
+    "system" to null,
+    "system-unwind" to C_UNWIND,
+    "rust-intrinsic" to INTRINSICS,
+    "rust-call" to UNBOXED_CLOSURES,
+    "platform-intrinsic" to PLATFORM_INTRINSICS,
+    "unadjusted" to ABI_UNADJUSTED
+)
 
+fun RsElement.areUnstableFeaturesAvailable(version: RustcVersion): ThreeState {
+    val crate = containingCrate ?: return ThreeState.UNSURE
+
+    val origin = crate.origin
+    val isStdlibPart = origin == PackageOrigin.STDLIB || origin == PackageOrigin.STDLIB_DEPENDENCY
+    return if (version.channel != RustChannel.NIGHTLY && !isStdlibPart) ThreeState.NO else ThreeState.YES
+}

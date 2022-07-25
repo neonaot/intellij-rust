@@ -11,17 +11,18 @@ import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.PopupStep
 import com.intellij.openapi.ui.popup.util.BaseListPopupStep
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import com.intellij.psi.impl.FakePsiElement
 import com.intellij.ui.popup.list.ListPopupImpl
 import com.intellij.ui.popup.list.PopupListElementRenderer
+import com.intellij.util.TextWithIcon
 import org.jetbrains.annotations.TestOnly
 import org.rust.cargo.icons.CargoIcons
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.ide.icons.RsIcons
 import org.rust.ide.utils.import.ImportCandidate
 import org.rust.ide.utils.import.ImportInfo
+import org.rust.openapiext.isUnitTestMode
 import java.awt.BorderLayout
 import javax.swing.Icon
 import javax.swing.JPanel
@@ -36,7 +37,7 @@ fun showItemsToImportChooser(
     callback: (ImportCandidate) -> Unit
 ) {
     val itemImportUi = if (isUnitTestMode) {
-        MOCK ?: error("You should set mock ui via `withMockImportItemUi`")
+        MOCK ?: error("Multiple items: ${items.map { it.info.usePath }}. You should set mock ui via `withMockImportItemUi`")
     } else {
         PopupImportItemUi(project, dataContext)
     }
@@ -99,7 +100,7 @@ private class ImportCandidatePsiElement(val importCandidate: ImportCandidate) : 
     override fun getParent(): PsiElement? = importCandidate.qualifiedNamedItem.item.parent
 }
 
-abstract class RsImportCandidateCellRendererBase : DefaultPsiElementCellRenderer() {
+private class RsImportCandidateCellRenderer : DefaultPsiElementCellRenderer() {
 
     private val Any.importCandidate: ImportCandidate? get() = (this as? ImportCandidatePsiElement)?.importCandidate
 
@@ -113,7 +114,7 @@ abstract class RsImportCandidateCellRendererBase : DefaultPsiElementCellRenderer
         val importCandidate = element.importCandidate
         return if (importCandidate != null) {
             val crateName = (importCandidate.info as? ImportInfo.ExternCrateImportInfo)?.externCrateName
-            val parentPath = importCandidate.qualifiedNamedItem.parentCrateRelativePath ?: return null
+            val parentPath = importCandidate.qualifiedNamedItem.parentCrateRelativePath
             val container = when {
                 crateName == null -> parentPath
                 parentPath.isEmpty() -> crateName
@@ -125,12 +126,11 @@ abstract class RsImportCandidateCellRendererBase : DefaultPsiElementCellRenderer
         }
     }
 
-    // BACKCOMPAT: 2021.1. Inline it
-    protected fun textWithIcon(value: Any?): Pair<String, Icon>? {
+    override fun getItemLocation(value: Any?): TextWithIcon? {
         val crate = value?.importCandidate?.qualifiedNamedItem?.containingCrate ?: return null
         return when (crate.origin) {
-            PackageOrigin.STDLIB, PackageOrigin.STDLIB_DEPENDENCY -> crate.normName to RsIcons.RUST
-            PackageOrigin.DEPENDENCY -> crate.normName to CargoIcons.ICON
+            PackageOrigin.STDLIB, PackageOrigin.STDLIB_DEPENDENCY -> TextWithIcon(crate.normName, RsIcons.RUST)
+            PackageOrigin.DEPENDENCY -> TextWithIcon(crate.normName, CargoIcons.ICON)
             else -> null
         }
     }

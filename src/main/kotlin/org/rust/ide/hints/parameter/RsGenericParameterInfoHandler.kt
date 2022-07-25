@@ -31,10 +31,8 @@ class RsGenericParameterInfoHandler : RsAsyncParameterInfoHandler<RsTypeArgument
         } else {
             return null
         }
-        val paramsWithBounds = genericDeclaration
-            .genericParameters
-            .filterNot { it is RsLifetimeParameter }
-            .nullize() ?: return null
+        val paramsWithBounds = genericDeclaration.getGenericParameters(includeLifetimes = false)
+        if (paramsWithBounds.isEmpty()) return null
         return listOfNotNull(firstLine(paramsWithBounds), secondLine(paramsWithBounds)).toTypedArray()
     }
 
@@ -131,6 +129,6 @@ private fun secondLine(params: List<RsGenericParameter>): HintLine? {
 }
 
 private fun List<String>.calculateRange(index: Int): TextRange {
-    val start = this.take(index).sumBy { it.length + 2 } // plus ", "
+    val start = this.take(index).sumOf { it.length + 2 } // plus ", "
     return TextRange(start, start + this[index].length)
 }

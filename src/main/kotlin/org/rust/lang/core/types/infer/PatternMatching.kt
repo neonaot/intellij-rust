@@ -5,7 +5,6 @@
 
 package org.rust.lang.core.types.infer
 
-import com.intellij.openapiext.Testmark
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.psi.ext.RsBindingModeKind.BindByReference
@@ -18,6 +17,7 @@ import org.rust.lang.core.types.ty.Mutability.IMMUTABLE
 import org.rust.lang.core.types.type
 import org.rust.lang.utils.evaluation.ConstExpr
 import org.rust.lang.utils.evaluation.toConst
+import org.rust.openapiext.Testmark
 
 fun RsPat.extractBindings(fcx: RsTypeInferenceWalker, type: Ty, defBm: RsBindingModeKind = BindByValue(IMMUTABLE)) {
     when (this) {
@@ -146,13 +146,13 @@ private fun inferSlicePatsTypes(
 
         val patRestCount = patList.count { it.isRest }
         if (patRestCount != 1) {
-            PatternMatchingTestMarks.multipleRestPats.hit()
+            PatternMatchingTestMarks.MultipleRestPats.hit()
             return CtUnknown
         }
 
         val restSize = arraySize - patList.size.toLong() + 1
         if (restSize < 0) {
-            PatternMatchingTestMarks.negativeRestSize.hit()
+            PatternMatchingTestMarks.NegativeRestSize.hit()
             return CtUnknown
         }
 
@@ -228,6 +228,6 @@ private fun Ty.stripReferences(defBm: RsBindingModeKind): Pair<Ty, RsBindingMode
 }
 
 object PatternMatchingTestMarks {
-    val multipleRestPats = Testmark("multipleRestPats")
-    val negativeRestSize = Testmark("negativeRestSize")
+    object MultipleRestPats : Testmark()
+    object NegativeRestSize : Testmark()
 }

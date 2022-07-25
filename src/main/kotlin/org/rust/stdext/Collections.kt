@@ -163,6 +163,9 @@ fun <T> dequeOf(vararg elements: T): Deque<T> =
 
 inline fun <reified T : Enum<T>> enumSetOf(): EnumSet<T> = EnumSet.noneOf(T::class.java)
 
+fun <T> List<T>.isSortedWith(comparator: Comparator<T>): Boolean =
+    asSequence().zipWithNext { a, b -> comparator.compare(a, b) <= 0 }.all { it }
+
 typealias LookbackValue<T> = Pair<T, T?>
 
 fun <T> Sequence<T>.withPrevious(): Sequence<LookbackValue<T>> = LookbackSequence(this)
@@ -209,5 +212,18 @@ private class WithNextIterator<T : Any>(private val iterator: Iterator<T>) : Ite
         val nextNext = iterator.nextOrNull()
         this.next = nextNext
         return WithNextValue(next, nextNext)
+    }
+}
+
+/**
+ * Removes an element from the list.
+ * The removed element is replaced by the last element of the list.
+ * Like [MutableList.removeAt], but `O(1)` at the cost of not preserving the list order
+ */
+fun <T> MutableList<T>.swapRemoveAt(index: Int) {
+    if (index == lastIndex) {
+        removeLast()
+    } else {
+        set(index, removeLast())
     }
 }

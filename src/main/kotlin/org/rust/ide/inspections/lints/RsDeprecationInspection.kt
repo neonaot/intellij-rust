@@ -6,6 +6,7 @@
 package org.rust.ide.inspections.lints
 
 import com.intellij.psi.PsiElement
+import io.github.z4kn4fein.semver.toVersionOrNull
 import org.rust.ide.inspections.RsProblemsHolder
 import org.rust.lang.core.psi.RsElementTypes.CSELF
 import org.rust.lang.core.psi.RsFile
@@ -43,22 +44,39 @@ class RsDeprecationInspection : RsLintInspection() {
     private fun checkAndRegisterAsDeprecated(identifier: PsiElement, original: PsiElement, holder: RsProblemsHolder) {
         if (original is RsOuterAttributeOwner) {
             val attr = original.queryAttributes.deprecatedAttribute ?: return
-            holder.registerLintProblem(identifier, attr.extractDeprecatedMessage(identifier.text))
+            val (message, highlightType) = attr.extractDeprecatedMessage(identifier.text)
+            holder.registerLintProblem(identifier, message, highlightType)
         }
     }
 
-    private fun RsMetaItem.extractDeprecatedMessage(item: String): String {
+    private fun RsMetaItem.extractDeprecatedMessage(item: String): Pair<String, RsLintHighlightingType> {
         val (note, since) = if (DEPRECATED_ATTR_NAME == name) {
             extract(NOTE_PARAM_NAME, SINCE_PARAM_NAME)
         } else {
             extract(REASON_PARAM_NAME, SINCE_PARAM_NAME)
         }
 
-        return buildString {
-            append("`$item` is deprecated")
-            if (since != null) append(" since $since")
-            if (note != null) append(": $note")
+        return if (isPresentlyDeprecated(since)) {
+            buildString {
+                append("`$item` is deprecated")
+                if (since != null) append(" since $since")
+                if (note != null) append(": $note")
+            } to RsLintHighlightingType.DEPRECATED
+        } else {
+            buildString {
+                append("`$item` will be deprecated from $since")
+                if (note != null) append(": $note")
+            } to RsLintHighlightingType.WEAK_WARNING
         }
+    }
+
+    // Presently as in not in the future; in the current version
+    private fun RsMetaItem.isPresentlyDeprecated(since: String?): Boolean {
+        // In case we can't check if the `sinceVersion` is at least the `currentVersion` just assume it is
+        val sinceVersion = since?.toVersionOrNull(false) ?: return true
+        val currentVersion = this.containingCargoPackage?.version?.toVersionOrNull() ?: return true
+
+        return currentVersion >= sinceVersion
     }
 
     private fun RsMetaItem.extract(noteParamName: String, sinceParamName: String): DeprecatedAttribute {

@@ -7,6 +7,8 @@ package org.rust.lang.core.resolve
 
 import com.intellij.openapi.util.SystemInfo
 import org.rust.*
+import org.rust.cargo.project.settings.toolchain
+import org.rust.cargo.toolchain.wsl.RsWslToolchain
 import org.rust.lang.core.macros.MacroExpansionScope
 import org.rust.lang.core.types.infer.TypeInferenceMarks
 import org.rust.stdext.BothEditions
@@ -274,6 +276,16 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         }   //^ ...libcore/macros/mod.rs|...core/src/macros/mod.rs
     """)
 
+    fun `test asm macro`() = stubOnlyResolve("""
+    //- main.rs
+        #![feature(asm)]
+
+        use std::arch::asm; // required since 1.59
+        fn main() {
+            asm!("nop");
+        } //^ ...libcore/macros/mod.rs|...core/src/macros/mod.rs|...core/src/lib.rs
+    """)
+
     fun `test iterating a vec`() = stubOnlyResolve("""
     //- main.rs
         struct FooBar;
@@ -400,7 +412,12 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         }
     """)
 
-    fun `test resolve derive traits`() {
+    fun `test resolve derive traits`() = resolveDeriveTraits()
+
+    @ProjectDescriptor(WithStdlibAndStdlibLikeDependencyRustProjectDescriptor::class)
+    fun `test resolve derive traits with stdlib-like dependencies`() = resolveDeriveTraits()
+
+    private fun resolveDeriveTraits() {
         val traitToPath = mapOf(
             "std::marker::Clone" to "clone.rs",
             "std::marker::Copy" to "marker.rs",
@@ -503,7 +520,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         }
     """)
 
-    fun `test ? operator with result`() = checkByCode("""
+    fun `test question mark operator with result`() = checkByCode("""
         struct S { field: u32 }
                     //X
         fn foo() -> Result<S, ()> { unimplemented!() }
@@ -515,6 +532,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         }
     """)
 
+    @CheckTestmarkHit(TypeInferenceMarks.QuestionOperator::class)
     fun `test try operator with option`() = checkByCode("""
         struct S { field: u32 }
                     //X
@@ -525,7 +543,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
             s.field;
             //^
         }
-    """, TypeInferenceMarks.questionOperator)
+    """)
 
     fun `test try! macro with aliased Result`() = checkByCode("""
         mod io {
@@ -546,6 +564,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         }
     """)
 
+    @CheckTestmarkHit(TypeInferenceMarks.MethodPickTraitScope::class)
     fun `test method defined in out of scope trait from prelude`() = stubOnlyResolve("""
     //- a.rs
         use super::S;
@@ -561,7 +580,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
         fn main() {
             let _: u8 = S.into();
         }               //^ a.rs
-    """, TypeInferenceMarks.methodPickTraitScope)
+    """)
 
     fun `test &str into String`() = stubOnlyResolve("""
     //- main.rs
@@ -717,7 +736,7 @@ class RsStdlibResolveTest : RsResolveTestBase() {
     @ExpandMacros(MacroExpansionScope.ALL, "actual_std")
     @ProjectDescriptor(WithActualStdlibRustProjectDescriptor::class)
     fun `test resolve in os module unix`() {
-        if (!SystemInfo.isUnix) return
+        if (!SystemInfo.isUnix && project.toolchain !is RsWslToolchain) return
         stubOnlyResolve("""
             //- main.rs
             use std::os::unix;
@@ -729,11 +748,26 @@ class RsStdlibResolveTest : RsResolveTestBase() {
     @ExpandMacros(MacroExpansionScope.ALL, "actual_std")
     @ProjectDescriptor(WithActualStdlibRustProjectDescriptor::class)
     fun `test resolve in os module windows`() {
-        if (!SystemInfo.isWindows) return
+        if (!SystemInfo.isWindows || project.toolchain is RsWslToolchain) return
         stubOnlyResolve("""
             //- main.rs
             use std::os::windows;
                         //^ ...libstd/sys/windows/ext/mod.rs|...std/src/sys/windows/ext/mod.rs|...std/src/os/windows/mod.rs
         """)
     }
+
+    fun `test pick method by self type`() = checkByCode("""
+        struct S<T>(T);
+
+        trait T1 { fn foo(self: Box<Self>); }
+        trait T2 { fn foo(self: Rc<Self>); }
+
+        impl<T> T1 for S<T> { fn foo(self: Box<Self>) {} }
+                               //X
+        impl<T> T2 for S<T> { fn foo(self: Rc<Self>) {} }
+
+        fn main() {
+            Box::new(S(0i32)).foo();
+        }                    //^
+    """)
 }

@@ -9,14 +9,13 @@ import com.intellij.execution.configuration.EnvironmentVariablesData
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.configurations.PtyCommandLine
 import com.intellij.execution.wsl.WslPath
-import com.intellij.openapi.util.SystemInfo
 import com.intellij.util.io.exists
 import com.intellij.util.net.HttpConfigurable
-import com.intellij.util.text.SemVer
 import org.rust.cargo.CargoConstants
 import org.rust.cargo.toolchain.flavors.RsToolchainFlavor
 import org.rust.cargo.toolchain.tools.Cargo
 import org.rust.cargo.toolchain.wsl.getHomePathCandidates
+import org.rust.cargo.util.parseSemVer
 import org.rust.openapiext.GeneralCommandLine
 import org.rust.openapiext.withWorkDirectory
 import java.io.File
@@ -105,10 +104,9 @@ abstract class RsToolchainBase(val location: Path) {
         environmentVariables.configureCommandLine(commandLine, true)
 
         if (emulateTerminal) {
-            if (!SystemInfo.isWindows) {
-                commandLine.environment["TERM"] = "xterm-256color"
-            }
-            commandLine = PtyCommandLine(commandLine).withInitialColumns(PtyCommandLine.MAX_COLUMNS)
+            commandLine = PtyCommandLine(commandLine)
+                .withInitialColumns(PtyCommandLine.MAX_COLUMNS)
+                .withConsoleMode(false)
         }
 
         if (patchToRemote) {
@@ -119,7 +117,7 @@ abstract class RsToolchainBase(val location: Path) {
     }
 
     companion object {
-        val MIN_SUPPORTED_TOOLCHAIN = SemVer.parseFromText("1.41.0")!!
+        val MIN_SUPPORTED_TOOLCHAIN = "1.41.0".parseSemVer()
 
         /** Environment variable to unlock unstable features of rustc and cargo.
          *  It doesn't change real toolchain.

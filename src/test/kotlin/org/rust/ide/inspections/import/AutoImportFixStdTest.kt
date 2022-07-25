@@ -5,21 +5,20 @@
 
 package org.rust.ide.inspections.import
 
-import org.rust.MockEdition
-import org.rust.ProjectDescriptor
-import org.rust.WithStdlibAndDependencyRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.*
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.ide.utils.import.Testmarks
 
 @ProjectDescriptor(WithStdlibAndDependencyRustProjectDescriptor::class)
 class AutoImportFixStdTest : AutoImportFixTestBase() {
+    @CheckTestmarkHit(Testmarks.AutoInjectedStdCrate::class)
     fun `test import item from std crate`() = checkAutoImportFixByText("""
-        fn foo<T: <error descr="Unresolved reference: `io`">io/*caret*/</error>::Read>(t: T) {}
+        fn foo<T: <error descr="Unresolved reference: `error`">error/*caret*/</error>::Error>(_: T) {}
     """, """
-        use std::io;
+        use std::error;
 
-        fn foo<T: io/*caret*/::Read>(t: T) {}
-    """, Testmarks.autoInjectedStdCrate)
+        fn foo<T: error/*caret*/::Error>(_: T) {}
+    """)
 
     fun `test import item from not std crate`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
@@ -30,8 +29,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(t: <error descr="Unresolved reference: `Bar`">Bar/*caret*/</error>) {}
     """, """
         //- main.rs
-        extern crate dep_lib_target;
-
         use dep_lib_target::foo::Bar;
 
         fn foo(t: Bar/*caret*/) {}
@@ -55,6 +52,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(t: Bar/*caret*/) {}
     """)
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test insert new extern crate item after existing extern crate items`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
         pub mod foo {
@@ -72,8 +70,9 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         use dep_lib_target::foo::Bar;
 
         fn foo(t: Bar/*caret*/) {}
-    """)
+    """, checkOptimizeImports = false)
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test insert extern crate item after inner attributes`() = checkAutoImportFixByFileTree("""
         //- main.rs
         #![allow(non_snake_case)]
@@ -95,6 +94,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(t: Bar/*caret*/) {}
     """)
 
+    @CheckTestmarkHit(Testmarks.AutoInjectedStdCrate::class)
     fun `test import reexported item from stdlib`() = checkAutoImportFixByText("""
         fn main() {
             let mutex = <error descr="Unresolved reference: `Mutex`">Mutex/*caret*/</error>::new(Vec::new());
@@ -105,7 +105,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn main() {
             let mutex = Mutex/*caret*/::new(Vec::new());
         }
-    """, Testmarks.autoInjectedStdCrate)
+    """)
 
     fun `test module reexport`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
@@ -125,8 +125,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """, """
         //- main.rs
-        extern crate dep_lib_target;
-
         use dep_lib_target::foo::baz::FooBar;
 
         fn main() {
@@ -134,14 +132,16 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """)
 
+    @CheckTestmarkHit(Testmarks.AutoInjectedStdCrate::class)
     fun `test module reexport in stdlib`() = checkAutoImportFixByText("""
         fn foo<T: <error descr="Unresolved reference: `Hash`">Hash/*caret*/</error>>(t: T) {}
     """, """
         use std::hash::Hash;
 
         fn foo<T: Hash/*caret*/>(t: T) {}
-    """, Testmarks.autoInjectedStdCrate)
+    """)
 
+    @CheckTestmarkHit(Testmarks.AutoInjectedCoreCrate::class)
     fun `test import without std crate 1`() = checkAutoImportFixByText("""
         #![no_std]
 
@@ -152,7 +152,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         use core::hash::Hash;
 
         fn foo<T: Hash/*caret*/>(t: T) {}
-    """, Testmarks.autoInjectedCoreCrate)
+    """)
 
     fun `test import without std crate 2`() = checkAutoImportFixByText("""
         #![no_std]
@@ -201,6 +201,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """)
 
+    @MockEdition(Edition.EDITION_2015)
     fun `test insert extern crate item in crate root`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
         pub struct Foo;
@@ -228,6 +229,8 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """)
 
+    // existing `extern crate` is ignored for simplicity
+    @MockEdition(Edition.EDITION_2015)
     fun `test insert relative use item 1`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
         pub struct Foo;
@@ -247,19 +250,23 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         pub struct Foo;
 
         //- main.rs
+        extern crate dep_lib_target;
+
         mod bar;
         fn main() {}
 
         //- bar.rs
         extern crate dep_lib_target;
 
-        use self::dep_lib_target::Foo;
+        use dep_lib_target::Foo;
 
         fn bar() {
             let x = Foo/*caret*/;
         }
-    """, Testmarks.externCrateItemInNotCrateRoot)
+    """)
 
+    // existing `extern crate` is ignored for simplicity
+    @MockEdition(Edition.EDITION_2015)
     fun `test insert relative use item 2`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
         pub struct Foo;
@@ -282,6 +289,8 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         pub struct Foo;
 
         //- main.rs
+        extern crate dep_lib_target;
+
         mod bar;
         fn main() {}
 
@@ -291,12 +300,12 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         mod baz;
 
         //- bar/baz.rs
-        use super::dep_lib_target::Foo;
+        use dep_lib_target::Foo;
 
         fn baz() {
             let x = Foo/*caret*/;
         }
-    """, Testmarks.externCrateItemInNotCrateRoot)
+    """)
 
     fun `test do not try to highlight primitive types`() = checkAutoImportFixIsUnavailable("""
         pub trait Zero<N> {
@@ -352,20 +361,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
             let x = 123.<error descr="Unresolved reference: `foo`">foo/*caret*/</error>();
         }
     """, """
-        //- dep-lib/lib.rs
-        pub trait Foo {
-            fn foo(&self);
-        }
-
-        impl<T> Foo for T {
-            fn foo(&self) {
-                unimplemented!()
-            }
-        }
-
         //- main.rs
-        extern crate dep_lib_target;
-
         use dep_lib_target::Foo;
 
         fn main() {
@@ -415,8 +411,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         pub struct Foo;
 
         //- dep-lib/lib.rs
-        extern crate dep_lib_target;
-
         pub use dep_lib_target::Foo;
 
         //- main.rs
@@ -424,17 +418,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
             let foo = <error descr="Unresolved reference: `Foo`">Foo/*caret*/</error>;
         }
     """, """
-        //- dep-lib-new/lib.rs
-        pub struct Foo;
-
-        //- dep-lib/lib.rs
-        extern crate dep_lib_target;
-
-        pub use dep_lib_target::Foo;
-
         //- main.rs
-        extern crate dep_lib_target;
-
         use dep_lib_target::Foo;
 
         fn main() {
@@ -442,7 +426,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test import item from not std crate (edition 2018)`() = checkAutoImportFixByFileTree("""
         //- dep-lib/lib.rs
         pub mod foo {
@@ -615,7 +598,7 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
             <error descr="Unresolved reference: `Foo`">Foo/*caret*/</error>::fmt();
         }
     """, """
-        use foo::Foo;
+        use crate::foo::Foo;
 
         mod foo {
             #[derive(Debug)]
@@ -627,7 +610,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test module re-export with module alias 1`() = checkAutoImportFixByFileTree("""
         //- trans-lib/lib.rs
         pub mod foo {
@@ -644,7 +626,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(x: bar/*caret*/::FooBar) {}
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test module re-export with module alias 2`() = checkAutoImportFixByFileTree("""
         //- trans-lib/lib.rs
         pub mod foo {
@@ -661,7 +642,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(x: FooBar/*caret*/) {}
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test crate re-export in use item`() = checkAutoImportFixByFileTree("""
         //- trans-lib/lib.rs
         pub struct FooBar;
@@ -677,7 +657,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(x: FooBar/*caret*/) {}
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test crate re-export in use item with alias`() = checkAutoImportFixByFileTree("""
         //- trans-lib/lib.rs
         pub struct FooBar;
@@ -693,7 +672,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(x: FooBar/*caret*/) {}
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test import item from workspace over std and extern crate`() = checkAutoImportFixByFileTreeWithMultipleChoice("""
         //- dep-lib/lib.rs
         pub mod foo {
@@ -724,7 +702,6 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         fn foo(t: Rc/*caret*/<usize>) {}
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test import item from std over extern crate`() = checkAutoImportFixByFileTreeWithMultipleChoice("""
         //- dep-lib/lib.rs
         pub mod foo {
@@ -741,5 +718,72 @@ class AutoImportFixStdTest : AutoImportFixTestBase() {
         use std::rc::Rc;
 
         fn foo(t: Rc/*caret*/<usize>) {}
+    """)
+
+    fun `test import item from proc_macro`() = checkAutoImportFixByFileTree("""
+    //- dep-proc-macro/lib.rs
+        fn foo(_: <error descr="Unresolved reference: `TokenStream`">TokenStream/*caret*/</error>) {}
+    """, """
+    //- dep-proc-macro/lib.rs
+        use proc_macro::TokenStream;
+
+        fn foo(_: TokenStream) {}
+    """)
+
+    fun `test item in core reexported in std`() = checkAutoImportFixByTextWithoutHighlighting("""
+        fn main() {
+            UnsafeCell/*caret*/;
+        }
+    """, """
+        use std::cell::UnsafeCell;
+
+        fn main() {
+            UnsafeCell;
+        }
+    """)
+
+    @MinRustcVersion("1.51.0")
+    fun `test item in core not reexported in std (with no_std)`() = checkAutoImportVariantsByText("""
+        #![no_std]
+        fn main() {
+            SplitInclusive/*caret*/;
+        }
+    """, listOf("core::slice::SplitInclusive", "core::str::SplitInclusive"))
+
+    fun `test item from 'test' crate (without extern crate)`() = checkAutoImportFixIsUnavailable("""
+        fn main() {
+            <error descr="Unresolved reference: `test_main`">/*caret*/test_main</error>();
+        }
+    """)
+
+    fun `test item from 'test' crate (with extern crate)`() = checkAutoImportFixByTextWithoutHighlighting("""
+        extern crate test;
+        fn main() {
+            /*caret*/test_main();
+        }
+    """, """
+        extern crate test;
+
+        use test::test_main;
+
+        fn main() {
+            test_main();
+        }
+    """)
+
+    fun `test add extern crate for alloc (with no_std)`() = checkAutoImportFixByTextWithoutHighlighting("""
+        #![no_std]
+        fn main() {
+            Vec/*caret*/::new();
+        }
+    """, """
+        #![no_std]
+        extern crate alloc;
+
+        use alloc::vec::Vec;
+
+        fn main() {
+            Vec::new();
+        }
     """)
 }

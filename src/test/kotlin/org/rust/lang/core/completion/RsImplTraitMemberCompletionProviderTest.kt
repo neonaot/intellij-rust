@@ -5,9 +5,7 @@
 
 package org.rust.lang.core.completion
 
-import org.rust.UseNewResolve
 
-@UseNewResolve
 class RsImplTraitMemberCompletionProviderTest : RsCompletionTestBase() {
     fun `test constant`() = doFirstCompletion("""
         trait Foo {
@@ -190,7 +188,7 @@ class RsImplTraitMemberCompletionProviderTest : RsCompletionTestBase() {
             /*caret*/
         }
     """, """
-        use foo::S;
+        use crate::foo::S;
 
         mod foo {
             pub struct S;
@@ -218,7 +216,7 @@ class RsImplTraitMemberCompletionProviderTest : RsCompletionTestBase() {
             /*caret*/
         }
     """, """
-        use foo::ALIAS;
+        use crate::foo::ALIAS;
 
         mod foo {
             pub type ALIAS = u32;
@@ -247,7 +245,7 @@ class RsImplTraitMemberCompletionProviderTest : RsCompletionTestBase() {
             /*caret*/
         }
     """, """
-        use foo::{S, T};
+        use crate::foo::{S, T};
 
         mod foo {
             pub struct S;
@@ -279,7 +277,7 @@ class RsImplTraitMemberCompletionProviderTest : RsCompletionTestBase() {
             /*caret*/
         }
     """, """
-        use foo::{ALIAS1, ALIAS2};
+        use crate::foo::{ALIAS1, ALIAS2};
 
         mod foo {
             pub type ALIAS1 = u32;

@@ -5,6 +5,8 @@
 
 package org.rust.lang.core.crate.impl
 
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.model.CargoProject
@@ -25,7 +27,7 @@ class CargoBasedCrate(
     override val dependencies: Collection<Crate.Dependency>,
     override val flatDependencies: LinkedHashSet<Crate>,
     override var procMacroArtifact: CargoWorkspaceData.ProcMacroArtifact? = null,
-) : Crate {
+) : UserDataHolderBase(), Crate {
     override val reverseDependencies = mutableListOf<CargoBasedCrate>()
     override var features: Map<String, FeatureState> = cargoTarget.pkg.featureState
 
@@ -58,7 +60,10 @@ class CargoBasedCrate(
     override val env: Map<String, String> get() = cargoTarget.pkg.env
     override val outDir: VirtualFile? get() = cargoTarget.pkg.outDir
 
-    override val rootMod: RsFile? get() = rootModFile?.toPsiFile(cargoProject.project)?.rustFile
+    override val hasCyclicDevDependencies: Boolean get() = cyclicDevDeps.isNotEmpty()
+
+    override val rootMod: RsFile? get() = rootModFile?.toPsiFile(project)?.rustFile
+    override val project: Project get() = cargoProject.project
 
     override val origin: PackageOrigin get() = cargoTarget.pkg.origin
     override val edition: CargoWorkspace.Edition get() = cargoTarget.edition

@@ -10,10 +10,16 @@ import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.util.Query
 import org.rust.lang.core.psi.*
+import org.rust.lang.core.stubs.common.RsMetaItemPsiOrStub
 import org.rust.openapiext.filterIsInstanceQuery
 import org.rust.openapiext.mapQuery
 
-interface RsStructOrEnumItemElement : RsQualifiedNamedElement, RsItemElement, RsGenericDeclaration, RsTypeDeclarationElement, RsNameIdentifierOwner
+interface RsStructOrEnumItemElement : RsQualifiedNamedElement,
+                                      RsItemElement,
+                                      RsAttrProcMacroOwner,
+                                      RsGenericDeclaration,
+                                      RsTypeDeclarationElement,
+                                      RsNameIdentifierOwner
 
 val RsStructOrEnumItemElement.derivedTraits: Collection<RsTraitItem>
     get() = deriveMetaItems
@@ -28,9 +34,13 @@ val RsStructOrEnumItemElement.derivedTraitsToMetaItems: Map<RsTraitItem, RsMetaI
 val RsStructOrEnumItemElement.deriveMetaItems: Sequence<RsMetaItem>
     get() = queryAttributes.deriveMetaItems
 
-val QueryAttributes<RsMetaItem>.deriveMetaItems: Sequence<RsMetaItem>
+@Suppress("UNCHECKED_CAST")
+val <T : RsMetaItemPsiOrStub> QueryAttributes<T>.deriveMetaItems: Sequence<T>
     get() = deriveAttributes
-        .flatMap { it.metaItemArgs?.metaItemList?.asSequence() ?: emptySequence() }
+        .flatMap { it.metaItemArgs?.metaItemList?.asSequence() as? Sequence<T> ?: emptySequence() }
+
+val <T : RsMetaItemPsiOrStub> QueryAttributes<T>.customDeriveMetaItems: Sequence<T>
+    get() = deriveMetaItems.filter { RsProcMacroPsiUtil.canBeCustomDeriveWithoutContextCheck(it) }
 
 val RsStructOrEnumItemElement.firstKeyword: PsiElement?
     get() = when (this) {

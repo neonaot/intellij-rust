@@ -5,10 +5,9 @@
 
 package org.rust.lang.core.resolve2.util
 
-import com.intellij.util.SmartList
 import org.rust.lang.core.crate.CratePersistentId
 import org.rust.lang.core.macros.ExpansionResultOk
-import org.rust.lang.core.macros.MappedTextRange
+import org.rust.lang.core.macros.MacroCallBody
 import org.rust.lang.core.macros.RangeMap
 import org.rust.lang.core.macros.decl.MACRO_DOLLAR_CRATE_IDENTIFIER
 import org.rust.lang.core.psi.RsMacro
@@ -16,6 +15,7 @@ import org.rust.lang.core.psi.RsMacroCall
 import org.rust.lang.core.psi.RsUseItem
 import org.rust.lang.core.resolve2.DeclMacroDefInfo
 import org.rust.lang.core.resolve2.MacroCallInfo
+import org.rust.lang.core.resolve2.MacroDefInfo
 import org.rust.lang.core.resolve2.RESOLVE_LOG
 import org.rust.openapiext.testAssert
 
@@ -31,12 +31,13 @@ import org.rust.openapiext.testAssert
  */
 fun createDollarCrateHelper(
     call: MacroCallInfo,
-    def: DeclMacroDefInfo,
+    def: MacroDefInfo,
     expansion: ExpansionResultOk
 ): DollarCrateHelper? {
-    val rangesInFile = findCrateIdForEachDollarCrate(expansion, call, def)
-    if (rangesInFile.isEmpty() && !def.hasLocalInnerMacros) return null
-    return DollarCrateHelper(expansion.ranges, rangesInFile, def.hasLocalInnerMacros, def.crate)
+    val rangesInFile = findCrateIdForEachDollarCrate(expansion, call, def.crate)
+    val hasLocalInnerMacros = def is DeclMacroDefInfo && def.hasLocalInnerMacros
+    if (rangesInFile.isEmpty() && !hasLocalInnerMacros) return null
+    return DollarCrateHelper(expansion.ranges, rangesInFile, hasLocalInnerMacros, def.crate)
 }
 
 /**
@@ -81,14 +82,12 @@ class DollarCrateHelper(
     }
 
     /** expandedText = 'foo! { ... $crate ... }' */
-    fun getRangeMap(startOffsetInExpansion: Int, endOffsetInExpansion: Int): RangeMap {
+    fun getDollarCrateMap(startOffsetInExpansion: Int, endOffsetInExpansion: Int): DollarCrateMap {
         val rangesInMacro = filterRangesInside(startOffsetInExpansion, endOffsetInExpansion)
-            .map { (offsetInExpansion, crateId) ->
-                val offsetInMacro = offsetInExpansion - startOffsetInExpansion
-                MappedTextRange(crateId, offsetInMacro, MACRO_DOLLAR_CRATE_IDENTIFIER.length)
+            .mapKeys { (offsetInExpansion, _) ->
+                /* offsetInMacro = */ offsetInExpansion - startOffsetInExpansion
             }
-        if (rangesInMacro.isEmpty()) return RangeMap.EMPTY
-        return RangeMap.from(SmartList(rangesInMacro))
+        return DollarCrateMap(rangesInMacro)
     }
 
     private fun filterRangesInside(macroStart: Int, macroEnd: Int): Map<Int, CratePersistentId> =
@@ -105,17 +104,19 @@ class DollarCrateHelper(
 private fun findCrateIdForEachDollarCrate(
     expansion: ExpansionResultOk,
     call: MacroCallInfo,
-    def: DeclMacroDefInfo
+    defCrate: CratePersistentId
 ): Map<Int, CratePersistentId> {
     val ranges = expansion.ranges  // between `call.body` and `expandedText`
     return expansion.dollarCrateOccurrences.asSequence()
         .mapNotNull { indexInExpandedText ->
             val indexInCallBody = ranges.mapOffsetFromExpansionToCallBody(indexInExpandedText)
             val crateId: CratePersistentId = if (indexInCallBody != null) {
-                testAssert {
-                    val fragmentInCallBody = call.body
-                        .subSequence(indexInCallBody, indexInCallBody + MACRO_DOLLAR_CRATE_IDENTIFIER.length)
-                    fragmentInCallBody == MACRO_DOLLAR_CRATE_IDENTIFIER
+                if (call.body is MacroCallBody.FunctionLike) {
+                    testAssert {
+                        val fragmentInCallBody = call.body.text
+                            .subSequence(indexInCallBody, indexInCallBody + MACRO_DOLLAR_CRATE_IDENTIFIER.length)
+                        fragmentInCallBody == MACRO_DOLLAR_CRATE_IDENTIFIER
+                    }
                 }
                 call.dollarCrateMap.mapOffsetFromExpansionToCallBody(indexInCallBody)
                     ?: run {
@@ -125,9 +126,22 @@ private fun findCrateIdForEachDollarCrate(
             } else {
                 // TODO: We should use [RangeMap] between `expansion.text` and macro body (macro_rules),
                 //  because there can be [MACRO_DOLLAR_CRATE_IDENTIFIER] in macro body (and not only '$crate')
-                def.crate
+                defCrate
             }
             indexInExpandedText to crateId
         }
         .toMap(hashMapOf())
+}
+
+/**
+ * Consider macro call with $crate in body:
+ * `foo! { ... $crate ... }`
+ *        <---> offset = keys in [ranges]
+ */
+class DollarCrateMap(private val ranges: Map<Int, CratePersistentId>) {
+    fun mapOffsetFromExpansionToCallBody(offset: Int): CratePersistentId? = ranges[offset]
+
+    companion object {
+        val EMPTY: DollarCrateMap = DollarCrateMap(emptyMap())
+    }
 }

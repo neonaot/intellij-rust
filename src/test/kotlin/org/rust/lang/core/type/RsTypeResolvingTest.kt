@@ -369,12 +369,12 @@ class RsTypeResolvingTest : RsTypificationTestBase() {
                             //^ &Struct<'_, Struct<'_, &'a str>>
     """, WITH_LIFETIMES)
 
-    fun `test no infinite recursion on "impl Self 1"`() = testType("""
+    fun `test no infinite recursion on 'impl Self' 1`() = testType("""
         impl Self {}
            //^ <unknown>
     """)
 
-    fun `test no infinite recursion on "impl Self 2"`() = testType("""
+    fun `test no infinite recursion on 'impl Self' 2`() = testType("""
         struct S<T>(T);
         impl S<Self> {}
            //^ S<<unknown>>
@@ -505,6 +505,30 @@ class RsTypeResolvingTest : RsTypificationTestBase() {
         type Bar = Foo<i32>;
                  //^ Foo<i32>
     """, WITH_ALIAS_NAMES)
+
+    fun `test primitive when there is a mod with the same name`() = testType("""
+        mod u64 {}
+        type T = u64;
+                 //^ u64
+    """)
+
+    fun `test associated type with name f64`() = testType("""
+        trait Trait { type f64; }
+        struct S;
+        impl Trait for S {
+            type f64 = ();
+        }
+        type A = <S as Trait>::f64;
+                             //^ ()
+    """)
+
+    fun `test unresolved associated type with name f64`() = testType("""
+        trait Trait {}
+        struct S;
+        impl Trait for S {}
+        type A = <S as Trait>::f64;
+                             //^ <unknown>
+    """)
 
     /**
      * Checks the type of the element in [code] pointed to by `//^` marker.

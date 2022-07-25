@@ -5,11 +5,7 @@
 
 package org.rust.lang.core.type
 
-import org.rust.ExpandMacros
-import org.rust.MockEdition
-import org.rust.ProjectDescriptor
-import org.rust.WithStdlibRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.*
 import org.rust.lang.core.macros.MacroExpansionScope
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.types.ty.TyFloat
@@ -118,6 +114,16 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
     """)
 
     fun `test vec!`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            let x = vec!(1, 2u16, 4, 8);
+            x;
+          //^ Vec<u16> | Vec<u16, Global>
+        }
+    """)
+
+    @ProjectDescriptor(WithStdlibAndStdlibLikeDependencyRustProjectDescriptor::class)
+    fun `test vec! with stdlib-like dependencies`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
             let x = vec!(1, 2u16, 4, 8);
@@ -561,6 +567,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
         }
     """)
 
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test iter take`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
@@ -597,6 +604,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
         }
     """)
 
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test iterator cloned`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
@@ -782,7 +790,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
     """)
 
     @ExpandMacros(MacroExpansionScope.ALL, "std")
-    fun `test iterate "for" complex pattern in complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
+    fun `test iterate 'for' complex pattern in complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
             for (a, _) in [(Some(42), false)].iter().map(|(n, f)| (n, f)) {
@@ -792,7 +800,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
     """)
 
     @ExpandMacros(MacroExpansionScope.ALL, "std")
-    fun `test iterate "while let" complex pattern = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
+    fun `test iterate 'while let' complex pattern = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
             while let Some((a, _)) = [(Some(42), false)].iter().map(|(n, f)| (n, f)).next() {
@@ -802,7 +810,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
     """)
 
     @ExpandMacros(MacroExpansionScope.ALL, "std")
-    fun `test "if let" complex pattern = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
+    fun `test 'if let' complex pattern = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
             if let Some((a, _)) = [(Some(42), false)].iter().map(|(n, f)| (n, f)).next() {
@@ -812,7 +820,7 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
     """)
 
     @ExpandMacros(MacroExpansionScope.ALL, "std")
-    fun `test "try expr" on a complex type = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
+    fun `test 'try expr' on a complex type = complex type (correct type vars resolve)`() = stubOnlyTypeInfer("""
     //- main.rs
         fn main() {
             let a = vec![Some(42)].into_iter().next()??;
@@ -851,7 +859,6 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
         } //^ &S<X>
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test await pin future`() = stubOnlyTypeInfer("""
     //- main.rs
         use std::future::Future;
@@ -888,5 +895,125 @@ class RsStdlibExpressionTypeInferenceTest : RsTypificationTestBase() {
             foo(num2);
             num2;
         } //^ i32
+    """)
+
+    // https://github.com/intellij-rust/intellij-rust/issues/8405
+    @MinRustcVersion("1.51.0")
+    fun `test addr_of_mut!`() = stubOnlyTypeInfer("""
+    //- main.rs
+        use std::ptr::addr_of_mut;
+        fn main() {
+            let mut a = 123;
+            let b = addr_of_mut!(a);
+            b;
+          //^ *mut i32
+        }
+    """)
+
+    fun `test iter map using std identity`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            let a = vec![1, 2]
+                .into_iter()
+                .map(std::convert::identity)
+                .next()
+                .unwrap();
+            a;
+        } //^ i32
+    """)
+
+    fun `test call an fn pointer reference`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn foo(f: &fn() -> i32) {
+            let a = f();
+            a;
+        } //^ i32
+    """)
+
+    fun `test call an fn pointer 2-reference`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn foo(f: &&fn() -> i32) {
+            let a = f();
+            a;
+        } //^ i32
+    """)
+
+    fun `test call an fn pointer under Rc`() = stubOnlyTypeInfer("""
+    //- main.rs
+        use std::rc::Rc;
+        fn foo(f: Rc<fn() -> i32>) {
+            let a = f();
+            a;
+        } //^ i32
+    """)
+
+    fun `test call type parameter with FnOnce with implicit return type`() = stubOnlyTypeInfer("""
+    //- main.rs
+        pub fn foo<F: FnOnce(i32)>(f: F) -> Self {
+            let a = f(1);
+            a;
+        } //^ ()
+    """)
+
+    fun `test box unsizing`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            foo(Box::new([1, 2, 3]));
+        }             //^ Box<[u8; 3], Global>|Box<[u8; 3]>
+
+        fn foo(a: Box<[u8]>) {}
+    """)
+
+    fun `test infer lambda parameter type 1`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            let a = |b| {
+                b;
+            };//^ i32
+            foo(a);
+        }
+
+        fn foo(_: fn(i32)) {}
+    """)
+
+    fun `test infer lambda parameter type 2`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            let a = |b| {
+                b;
+            };//^ i32
+            foo(a);
+        }
+
+        fn foo<T: FnOnce(i32)>(_: T) {}
+    """)
+
+    fun `test try-poll`() = stubOnlyTypeInfer("""
+    //- main.rs
+        use std::task::Poll;
+        fn foo(p: Poll<Result<i32, ()>>) -> Result<(), ()> {
+            let a = p?;
+            a;
+          //^ Poll<i32>
+            Ok(())
+        }
+    """)
+
+    fun `test for loop over type parameter implementing Iterator`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn foo<I: Iterator<Item = i32>>(a: I) {
+            for b in a {
+                b;
+            } //^ i32
+        }
+    """)
+
+    fun `test Option clone method`() = stubOnlyTypeInfer("""
+    //- main.rs
+        fn main() {
+            let a = Some(String::new());
+            let b = a.clone();
+            b;
+        } //^ Option<String>
     """)
 }

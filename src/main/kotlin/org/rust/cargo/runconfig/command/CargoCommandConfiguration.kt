@@ -10,14 +10,19 @@ import com.intellij.execution.InputRedirectAware
 import com.intellij.execution.configuration.EnvironmentVariablesData
 import com.intellij.execution.configurations.*
 import com.intellij.execution.runners.ExecutionEnvironment
+import com.intellij.execution.target.LanguageRuntimeType
+import com.intellij.execution.target.TargetEnvironmentAwareRunProfile
+import com.intellij.execution.target.TargetEnvironmentConfiguration
 import com.intellij.execution.testframework.actions.ConsolePropertiesProvider
 import com.intellij.execution.testframework.sm.runner.SMTRunnerConsoleProperties
+import com.intellij.execution.util.ProgramParametersUtil
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import com.intellij.openapi.util.SystemInfo
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.util.execution.ParametersListUtil
-import com.intellij.util.io.exists
 import org.jdom.Element
 import org.rust.RsBundle
 import org.rust.cargo.project.model.CargoProject
@@ -26,6 +31,9 @@ import org.rust.cargo.project.settings.toolchain
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.runconfig.*
+import org.rust.cargo.runconfig.target.BuildTarget
+import org.rust.cargo.runconfig.target.RsLanguageRuntimeConfiguration
+import org.rust.cargo.runconfig.target.RsLanguageRuntimeType
 import org.rust.cargo.runconfig.test.CargoTestConsoleProperties
 import org.rust.cargo.runconfig.ui.CargoCommandConfigurationEditor
 import org.rust.cargo.toolchain.BacktraceMode
@@ -36,33 +44,52 @@ import org.rust.cargo.toolchain.tools.Cargo
 import org.rust.cargo.toolchain.tools.isRustupAvailable
 import org.rust.ide.experiments.RsExperiments
 import org.rust.openapiext.isFeatureEnabled
-import org.rust.stdext.toPathOrNull
+import org.rust.openapiext.isUnitTestMode
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+
+val CargoCommandConfiguration.hasRemoteTarget: Boolean
+    get() = defaultTargetName != null
 
 /**
  * This class describes a Run Configuration.
  * It is basically a bunch of values which are persisted to .xml files inside .idea,
  * or displayed in the GUI form. It has to be mutable to satisfy various IDE's APIs.
+ *
+ * Class is open not to break [EduTools](https://plugins.jetbrains.com/plugin/10081-edutools) plugin
  */
 open class CargoCommandConfiguration(
     project: Project,
     name: String,
     factory: ConfigurationFactory
 ) : RsCommandConfiguration(project, name, factory),
-    InputRedirectAware.InputRedirectOptions, ConsolePropertiesProvider {
+    InputRedirectAware.InputRedirectOptions,
+    ConsolePropertiesProvider,
+    TargetEnvironmentAwareRunProfile {
     override var command: String = "run"
     var channel: RustChannel = RustChannel.DEFAULT
     var requiredFeatures: Boolean = true
     var allFeatures: Boolean = false
-    var emulateTerminal: Boolean = false
+    var emulateTerminal: Boolean = emulateTerminalDefault
     var withSudo: Boolean = false
+    var buildTarget: BuildTarget = BuildTarget.REMOTE
     var backtrace: BacktraceMode = BacktraceMode.SHORT
     var env: EnvironmentVariablesData = EnvironmentVariablesData.DEFAULT
 
     private var isRedirectInput: Boolean = false
     private var redirectInputPath: String? = null
+    private val redirectInputFile: File?
+        get() {
+            if (!isRedirectInput) return null
+            if (redirectInputPath?.isNotEmpty() != true) return null
+            val redirectInputPath = FileUtil.toSystemDependentName(ProgramParametersUtil.expandPathAndMacros(redirectInputPath, null, project))
+            var file = File(redirectInputPath)
+            if (!file.isAbsolute && workingDirectory != null) {
+                file = File(File(workingDirectory.toString()), redirectInputPath)
+            }
+            return file
+        }
 
     override fun isRedirectInput(): Boolean = isRedirectInput
 
@@ -76,6 +103,22 @@ open class CargoCommandConfiguration(
         redirectInputPath = value
     }
 
+    override fun canRunOn(target: TargetEnvironmentConfiguration): Boolean {
+        return target.runtimes.findByType(RsLanguageRuntimeConfiguration::class.java) != null
+    }
+
+    override fun getDefaultLanguageRuntimeType(): LanguageRuntimeType<*>? {
+        return LanguageRuntimeType.EXTENSION_NAME.findExtension(RsLanguageRuntimeType::class.java)
+    }
+
+    override fun getDefaultTargetName(): String? {
+        return options.remoteTarget
+    }
+
+    override fun setDefaultTargetName(targetName: String?) {
+        options.remoteTarget = targetName
+    }
+
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
         element.writeEnum("channel", channel)
@@ -83,6 +126,7 @@ open class CargoCommandConfiguration(
         element.writeBool("allFeatures", allFeatures)
         element.writeBool("emulateTerminal", emulateTerminal)
         element.writeBool("withSudo", withSudo)
+        element.writeEnum("buildTarget", buildTarget)
         element.writeEnum("backtrace", backtrace)
         env.writeExternal(element)
         element.writeBool("isRedirectInput", isRedirectInput)
@@ -100,6 +144,7 @@ open class CargoCommandConfiguration(
         element.readBool("allFeatures")?.let { allFeatures = it }
         element.readBool("emulateTerminal")?.let { emulateTerminal = it }
         element.readBool("withSudo")?.let { withSudo = it }
+        element.readEnum<BuildTarget>("buildTarget")?.let { buildTarget = it }
         element.readEnum<BacktraceMode>("backtrace")?.let { backtrace = it }
         env = EnvironmentVariablesData.readExternal(element)
         element.readBool("isRedirectInput")?.let { isRedirectInput = it }
@@ -108,7 +153,7 @@ open class CargoCommandConfiguration(
 
     fun setFromCmd(cmd: CargoCommandLine) {
         channel = cmd.channel
-        command = ParametersListUtil.join(cmd.command, *cmd.additionalArguments.toTypedArray())
+        command = cmd.toRawCommand()
         requiredFeatures = cmd.requiredFeatures
         allFeatures = cmd.allFeatures
         emulateTerminal = cmd.emulateTerminal
@@ -121,20 +166,25 @@ open class CargoCommandConfiguration(
     }
 
     fun canBeFrom(cmd: CargoCommandLine): Boolean =
-        command == ParametersListUtil.join(cmd.command, *cmd.additionalArguments.toTypedArray())
+        command == cmd.toRawCommand()
 
     @Throws(RuntimeConfigurationException::class)
     override fun checkConfiguration() {
         if (isRedirectInput) {
-            val path = redirectInputPath?.toPathOrNull()
+            val file = redirectInputFile
             when {
-                path?.exists() != true -> throw RuntimeConfigurationWarning("Input file doesn't exist")
-                !path.toFile().isFile -> throw RuntimeConfigurationWarning("Input file is not valid")
+                file?.exists() != true -> throw RuntimeConfigurationWarning("Input file doesn't exist")
+                !file.isFile -> throw RuntimeConfigurationWarning("Input file is not valid")
             }
         }
+
+        val config = clean()
+        if (config is CleanConfiguration.Err) throw config.error
+        config as CleanConfiguration.Ok
+
         // TODO: remove when `com.intellij.execution.process.ElevationService` supports error stream redirection
         // https://github.com/intellij-rust/intellij-rust/issues/7320
-        if (withSudo && showTestToolWindow()) {
+        if (withSudo && showTestToolWindow(config.cmd)) {
             val message = if (SystemInfo.isWindows) {
                 RsBundle.message("notification.run.tests.as.root.windows")
             } else {
@@ -142,9 +192,6 @@ open class CargoCommandConfiguration(
             }
             throw RuntimeConfigurationWarning(message)
         }
-
-        val config = clean()
-        if (config is CleanConfiguration.Err) throw config.error
     }
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> =
@@ -152,22 +199,29 @@ open class CargoCommandConfiguration(
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState? {
         val config = clean().ok ?: return null
-        return if (showTestToolWindow()) {
+        return if (showTestToolWindow(config.cmd)) {
             CargoTestRunState(environment, this, config)
         } else {
             CargoRunState(environment, this, config)
         }
     }
 
-    private fun showTestToolWindow(): Boolean = command.startsWith("test") &&
-        isFeatureEnabled(RsExperiments.TEST_TOOL_WINDOW) &&
-        !Cargo.TEST_NOCAPTURE_ENABLED_KEY.asBoolean() &&
-        !command.contains("--nocapture")
+    private fun showTestToolWindow(commandLine: CargoCommandLine): Boolean = when {
+        !isFeatureEnabled(RsExperiments.TEST_TOOL_WINDOW) -> false
+        commandLine.command != "test" -> false
+        "--nocapture" in commandLine.additionalArguments -> false
+        Cargo.TEST_NOCAPTURE_ENABLED_KEY.asBoolean() -> false
+        else -> !hasRemoteTarget
+    }
 
-
-    override fun createTestConsoleProperties(executor: Executor): SMTRunnerConsoleProperties? =
-        if (showTestToolWindow()) CargoTestConsoleProperties(this, executor) else null
-
+    override fun createTestConsoleProperties(executor: Executor): SMTRunnerConsoleProperties? {
+        val config = clean().ok ?: return null
+        return if (showTestToolWindow(config.cmd)) {
+            CargoTestConsoleProperties(this, executor)
+        } else {
+            null
+        }
+    }
 
     sealed class CleanConfiguration {
         class Ok(
@@ -180,27 +234,25 @@ open class CargoCommandConfiguration(
         val ok: Ok? get() = this as? Ok
 
         companion object {
-            fun error(message: String) = Err(RuntimeConfigurationError(message))
+            fun error(@Suppress("UnstableApiUsage") @DialogMessage message: String) = Err(RuntimeConfigurationError(message))
         }
     }
 
     fun clean(): CleanConfiguration {
         val workingDirectory = workingDirectory
             ?: return CleanConfiguration.error("No working directory specified")
-        val redirectInputFrom = redirectInputPath
-            ?.takeIf { isRedirectInput && it.isNotBlank() }
-            ?.let { File(it) }
+
         val cmd = run {
-            val args = ParametersListUtil.parse(command)
-            if (args.isEmpty()) {
-                return CleanConfiguration.error("No command specified")
-            }
+            val parsed = ParsedCommand.parse(command)
+                ?: return CleanConfiguration.error("No command specified")
+
             CargoCommandLine(
-                args.first(),
+                parsed.command,
                 workingDirectory,
-                args.drop(1),
-                redirectInputFrom,
+                parsed.additionalArguments,
+                redirectInputFile,
                 backtrace,
+                parsed.toolchain,
                 channel,
                 env,
                 requiredFeatures,
@@ -222,6 +274,11 @@ open class CargoCommandConfiguration(
         }
 
         return CleanConfiguration.Ok(cmd, toolchain)
+    }
+
+    private fun CargoCommandLine.toRawCommand(): String {
+        val toolchainOverride = toolchain?.let { "+$it" }
+        return ParametersListUtil.join(listOfNotNull(toolchainOverride, command, *additionalArguments.toTypedArray()))
     }
 
     companion object {
@@ -295,7 +352,22 @@ open class CargoCommandConfiguration(
                 }
             }
         }
+
+        val emulateTerminalDefault: Boolean
+            get() = isFeatureEnabled(RsExperiments.EMULATE_TERMINAL) && !isUnitTestMode
     }
 }
 
 val CargoProject.workingDirectory: Path get() = manifest.parent
+
+data class ParsedCommand(val command: String, val toolchain: String?, val additionalArguments: List<String>) {
+    companion object {
+        fun parse(rawCommand: String): ParsedCommand? {
+            val args = ParametersListUtil.parse(rawCommand)
+            val command = args.firstOrNull { !it.startsWith("+") } ?: return null
+            val toolchain = args.firstOrNull()?.takeIf { it.startsWith("+") }?.removePrefix("+")
+            val additionalArguments = args.drop(args.indexOf(command) + 1)
+            return ParsedCommand(command, toolchain, additionalArguments)
+        }
+    }
+}

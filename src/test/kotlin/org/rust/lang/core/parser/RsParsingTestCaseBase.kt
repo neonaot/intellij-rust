@@ -5,7 +5,6 @@
 
 package org.rust.lang.core.parser
 
-import com.intellij.TestCase
 import com.intellij.core.CoreInjectedLanguageManager
 import com.intellij.lang.LanguageBraceMatching
 import com.intellij.lang.injection.InjectedLanguageManager
@@ -16,6 +15,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.testFramework.ParsingTestCase
 import org.jetbrains.annotations.NonNls
 import org.rust.RsTestCase
+import org.rust.TestCase
 import org.rust.ide.typing.RsBraceMatcher
 import org.rust.lang.RsLanguage
 
@@ -51,5 +51,11 @@ abstract class RsParsingTestCaseBase(@NonNls dataPath: String) : ParsingTestCase
             }
         })
         return hasErrors
+    }
+
+    /** Just check that the file is parsed (somehow) without checking its AST */
+    protected fun checkFileParsed() {
+        val name = testName
+        parseFile(name, loadFile("$name.$myFileExt"));
     }
 }

@@ -17,15 +17,12 @@ interface RsVisible : RsElement {
 }
 
 interface RsVisibilityOwner : RsVisible {
-    @JvmDefault
     val vis: RsVis?
         get() = PsiTreeUtil.getStubChildOfType(this, RsVis::class.java)
 
-    @JvmDefault
     override val visibility: RsVisibility
         get() = vis?.visibility ?: RsVisibility.Private
 
-    @JvmDefault
     override val isPublic: Boolean
         get() = vis != null
 }
@@ -97,6 +94,30 @@ fun RsVisibility.intersect(other: RsVisibility): RsVisibility = when (this) {
             RsVisibility.Restricted(if (inMod.superMods.contains(other.inMod)) inMod else other.inMod)
         }
     }
+}
+
+fun RsVisibility.unite(other: RsVisibility): RsVisibility = when {
+    this is RsVisibility.Restricted && other is RsVisibility.Restricted -> {
+        val commonParent = commonParentMod(inMod, other.inMod)
+        if (commonParent != null) {
+            RsVisibility.Restricted(commonParent)
+        } else {
+            RsVisibility.Public
+        }
+    }
+    this == RsVisibility.Private && other is RsVisibility.Private -> RsVisibility.Private
+    else -> RsVisibility.Public
+}
+
+fun RsVisibility.format(): String = when (this) {
+    RsVisibility.Private -> ""
+    RsVisibility.Public -> "pub "
+    is RsVisibility.Restricted ->
+        if (inMod.isCrateRoot) {
+            "pub(crate) "
+        } else {
+            "pub(in crate${inMod.crateRelativePath}) "
+        }
 }
 
 val RsVis.visibility: RsVisibility

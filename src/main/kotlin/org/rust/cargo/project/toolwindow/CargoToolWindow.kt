@@ -39,6 +39,8 @@ class CargoToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         guessAndSetupRustProject(project)
         val toolwindowPanel = CargoToolWindowPanel(project)
+        // BACKCOMPAT: 2022.1
+        @Suppress("DEPRECATION")
         val tab = ContentFactory.SERVICE.getInstance()
             .createContent(toolwindowPanel, "", false)
         toolWindow.contentManager.addContent(tab)
@@ -70,7 +72,7 @@ private class CargoToolWindowPanel(project: Project) : SimpleToolWindowPanel(tru
 
     init {
         toolbar = cargoTab.toolbar.component
-        cargoTab.toolbar.setTargetComponent(this)
+        cargoTab.toolbar.targetComponent = this
         setContent(cargoTab.content)
     }
 

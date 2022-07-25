@@ -19,7 +19,6 @@ import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.model.impl.testCargoProjects
 import org.rust.lang.core.crate.impl.CrateGraphTestmarks
 import org.rust.lang.core.psi.RsPath
-import org.rust.lang.core.resolve.NameResolutionTestmarks
 import org.rust.openapiext.pathAsPath
 
 class CargoProjectResolveTest : RsWithToolchainTestBase() {
@@ -92,9 +91,7 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
                 }
             }
         }
-        NameResolutionTestmarks.shadowingStdCrates.ignoreInNewResolve(project).checkHit {
-            testProject.checkReferenceIsResolved<RsPath>("foo/src/lib.rs")
-        }
+        testProject.checkReferenceIsResolved<RsPath>("foo/src/lib.rs")
     }
 
     fun `test resolve local package`() = buildProject {
@@ -578,6 +575,7 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
         }.create(project, libraryDir)
 
         val libraryPath = FileUtil.toSystemIndependentName(library.root.pathAsPath.resolve("cargo").toString())
+            .let { rustupFixture.toolchain?.toRemotePath(it) }
         val testProject = buildProject {
             toml("Cargo.toml", """
                 [package]
@@ -709,16 +707,16 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
                 edition = "2018"
 
                 [features]
-                foo_feature = ["bar_renamed/bar_feature"]
+                foo_feature = ["bar-renamed/bar_feature"]
 
-                [dependencies.bar_renamed]
+                [dependencies.bar-renamed]
                 package = "bar"
                 path = "../bar"
                 optional = true
             """)
             dir("src") {
                 rust("lib.rs", """
-                    #[cfg(feature="bar_renamed")]
+                    #[cfg(feature="bar-renamed")]
                     pub use bar_renamed::bar;
                 """)
             }
@@ -741,7 +739,7 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
         }
     }.run {
         project.cargoProjects.singlePackage("foo").checkFeatureEnabled("foo_feature")
-        project.cargoProjects.singlePackage("foo").checkFeatureEnabled("bar_renamed")
+        project.cargoProjects.singlePackage("foo").checkFeatureEnabled("bar-renamed")
         project.cargoProjects.singlePackage("bar").checkFeatureEnabled("bar_feature")
         checkReferenceIsResolved<RsPath>("src/main.rs")
     }
@@ -883,6 +881,7 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
         prj.checkReferenceIsResolved<RsPath>("project_2/src/main.rs")
     }
 
+    @UseOldResolve
     fun `test cyclic dev deps`() = buildProject {
         toml("Cargo.toml", """
             [package]
@@ -928,7 +927,7 @@ class CargoProjectResolveTest : RsWithToolchainTestBase() {
             }
         }
     }.run {
-        CrateGraphTestmarks.cyclicDevDependency.checkHit {
+        CrateGraphTestmarks.CyclicDevDependency.checkHit {
             checkReferenceIsResolved<RsPath>("tests/main.rs")
             checkReferenceIsResolved<RsPath>("src/lib.rs")
         }

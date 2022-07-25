@@ -6,6 +6,7 @@
 package org.rust.ide.refactoring
 
 import com.intellij.refactoring.BaseRefactoringProcessor
+import com.intellij.testFramework.PsiTestUtil
 import org.intellij.lang.annotations.Language
 import org.rust.EmptyDescriptor
 import org.rust.ProjectDescriptor
@@ -269,7 +270,7 @@ class RenameTest : RsTestBase() {
     @ProjectDescriptor(EmptyDescriptor::class)
     fun `test do not invoke rename refactoring for directory outside of cargo project`() {
         val dir = myFixture.tempDirFixture.findOrCreateDir("dir").toPsiDirectory(project)!!
-        RsDirectoryRenameProcessor.Testmarks.rustDirRenameHandler.checkNotHit {
+        RsDirectoryRenameProcessor.Testmarks.RustDirRenameHandler.checkNotHit {
             myFixture.renameElement(dir, "dir2")
         }
     }
@@ -664,6 +665,12 @@ class RenameTest : RsTestBase() {
         }
     """)
 
+    fun `test rename macro metavar`() = doTest("b", """
+        macro_rules! foo { ($ i/*caret*/:item) => { $ i }; }
+    """, """
+        macro_rules! foo { ($ b:item) => { $ b }; }
+    """)
+
     private fun doTest(
         newName: String,
         @Language("Rust") before: String,
@@ -673,6 +680,7 @@ class RenameTest : RsTestBase() {
         val element = myFixture.elementAtCaret
         myFixture.renameElement(element, newName, true, true)
         myFixture.checkResult(after)
+        PsiTestUtil.checkPsiStructureWithCommit(myFixture.file, PsiTestUtil::checkPsiMatchesTextIgnoringNonCode)
     }
 
     private fun doTestWithConflicts(

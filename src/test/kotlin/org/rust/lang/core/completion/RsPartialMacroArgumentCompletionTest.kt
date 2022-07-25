@@ -32,6 +32,17 @@ class RsPartialMacroArgumentCompletionTest : RsCompletionTestBase() {
         }
     """, setOf("iii"), setOf("i32"))
 
+    fun `test expr (macro 2)`() = doTest("""
+        macro my_macro($ e:expr, foo) {
+            1
+        }
+
+        fn main() {
+            let iii = 1;
+            my_macro!(i/*caret*/);
+        }
+    """, setOf("iii"))
+
     fun `test expr complex`() = doTest("""
         macro_rules! my_macro {
             ($ e:expr, foo) => (1);
@@ -82,7 +93,7 @@ class RsPartialMacroArgumentCompletionTest : RsCompletionTestBase() {
         }
     """, setOf("iii", "i32"))
 
-    fun `test no completion from index`() = doTest("""
+    fun `test no completion for out-of-scope items 1`() = doTest("""
         macro_rules! my_macro {
             ($ e:expr, foo) => (1);
             ($ e:expr, bar) => (1);
@@ -90,6 +101,21 @@ class RsPartialMacroArgumentCompletionTest : RsCompletionTestBase() {
 
         fn main() {
             my_macro!(Hash/*caret*/);
+        }
+
+        pub mod collections {
+            pub struct HashMap;
+        }
+    """, setOf(), setOf("HashMap"))
+
+    fun `test no completion for out-of-scope items 2`() = doTest("""
+        macro_rules! my_macro {
+            ($ e:expr, foo) => (1);
+            ($ e:expr, bar) => (1);
+        }
+
+        fn main() {
+            my_macro!(/*caret*/);
         }
 
         pub mod collections {
@@ -110,8 +136,8 @@ class RsPartialMacroArgumentCompletionTest : RsCompletionTestBase() {
     """, setOf("iii", "i32"))
 
     private fun doTest(@Language("Rust") code: String, contains: Set<String>, notContains: Set<String> = emptySet()) {
-        RsPartialMacroArgumentCompletionProvider.Testmarks.touched.checkHit {
-            RsFullMacroArgumentCompletionProvider.Testmarks.touched.checkNotHit {
+        RsPartialMacroArgumentCompletionProvider.Testmarks.Touched.checkHit {
+            RsFullMacroArgumentCompletionProvider.Testmarks.Touched.checkNotHit {
                 if (contains.isNotEmpty()) {
                     checkContainsCompletion(contains.toList(), code)
                 }

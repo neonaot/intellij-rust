@@ -15,6 +15,7 @@ import org.rust.lang.core.psi.RsElementTypes.*
 import org.rust.lang.core.resolve.*
 import org.rust.lang.core.resolve.ref.*
 import org.rust.lang.core.stubs.RsPathStub
+import org.rust.lang.core.stubs.common.RsPathPsiOrStub
 import org.rust.lang.core.types.ty.TyPrimitive
 
 private val RS_PATH_KINDS = tokenSetOf(IDENTIFIER, SELF, SUPER, CSELF, CRATE)
@@ -22,14 +23,9 @@ private val RS_PATH_KINDS = tokenSetOf(IDENTIFIER, SELF, SUPER, CSELF, CRATE)
 val RsPath.hasCself: Boolean get() = kind == PathKind.CSELF
 
 /** For `Foo::bar::baz::quux` path returns `Foo` */
-tailrec fun RsPath.basePath(): RsPath {
-    val qualifier = path
-    return if (qualifier === null) this else qualifier.basePath()
-}
-
-/** For `Foo::bar::baz::quux` path returns `Foo` */
-tailrec fun RsPathStub.basePath(): RsPathStub {
-    val qualifier = path
+tailrec fun <T : RsPathPsiOrStub> T.basePath(): T {
+    @Suppress("UNCHECKED_CAST")
+    val qualifier = path as T?
     return if (qualifier === null) this else qualifier.basePath()
 }
 
@@ -91,6 +87,7 @@ fun RsPath.allowedNamespaces(isCompletion: Boolean = false): Set<Namespace> = wh
     }
     is RsPathExpr -> if (isCompletion) TYPES_N_VALUES else VALUES
     is RsPatTupleStruct -> VALUES
+    is RsMacroCall -> MACROS
     is RsPathCodeFragment -> parent.ns
     else -> TYPES_N_VALUES
 }
@@ -109,12 +106,6 @@ enum class PathResolveStatus {
     RESOLVED, UNRESOLVED, NO_REFERENCE
 }
 
-val RsPath.lifetimeArguments: List<RsLifetime> get() = typeArgumentList?.lifetimeList.orEmpty()
-
-val RsPath.typeArguments: List<RsTypeReference> get() = typeArgumentList?.typeReferenceList.orEmpty()
-
-val RsPath.constArguments: List<RsExpr> get() = typeArgumentList?.exprList.orEmpty()
-
 abstract class RsPathImplMixin : RsStubbedElementImpl<RsPathStub>,
                                  RsPath {
     constructor(node: ASTNode) : super(node)
@@ -129,6 +120,14 @@ abstract class RsPathImplMixin : RsStubbedElementImpl<RsPathStub>,
                 RsPsiPattern.derivedTraitMetaItem.accepts(parent) -> RsDeriveTraitReferenceImpl(this)
                 RsPsiPattern.nonStdOuterAttributeMetaItem.accepts(parent) -> RsAttributeProcMacroReferenceImpl(this)
                 else -> null
+            }
+            is RsPath -> {
+                val rootPathParent = parent.rootPath().parent
+                if (rootPathParent !is RsMetaItem || RsPsiPattern.nonStdOuterAttributeMetaItem.accepts(rootPathParent)) {
+                    RsPathReferenceImpl(this)
+                } else {
+                    null
+                }
             }
             else -> RsPathReferenceImpl(this)
         }

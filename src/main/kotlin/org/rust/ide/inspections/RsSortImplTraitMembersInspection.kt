@@ -9,11 +9,11 @@ import com.intellij.codeInspection.LocalQuickFix
 import com.intellij.codeInspection.ProblemDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.tree.IElementType
 import org.rust.lang.core.psi.RsImplItem
 import org.rust.lang.core.psi.RsVisitor
 import org.rust.lang.core.psi.ext.*
+import org.rust.openapiext.Testmark
 
 class RsSortImplTraitMembersInspection : RsLocalInspectionTool() {
     override fun buildVisitor(holder: RsProblemsHolder, isOnTheFly: Boolean): RsVisitor = object : RsVisitor() {
@@ -37,7 +37,7 @@ class RsSortImplTraitMembersInspection : RsLocalInspectionTool() {
         private fun sortedImplItems(implItems: List<RsAbstractable>, traitItems: List<RsAbstractable>): List<RsAbstractable>? {
             val traitItemMap = traitItems.withIndex().associate { it.value.key() to it.index }
             if (implItems.any { it.key() !in traitItemMap }) {
-                Testmarks.implMemberNotInTrait.hit()
+                Testmarks.ImplMemberNotInTrait.hit()
                 return null
             }
             val sortedImplItems = implItems.sortedBy { traitItemMap[it.key()] }
@@ -65,7 +65,7 @@ class RsSortImplTraitMembersInspection : RsLocalInspectionTool() {
     }
 
     object Testmarks {
-        val implMemberNotInTrait = Testmark("implMemberNotInTrait")
+        object ImplMemberNotInTrait : Testmark()
     }
 }
 

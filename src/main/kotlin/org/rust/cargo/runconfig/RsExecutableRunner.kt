@@ -15,13 +15,15 @@ import com.intellij.execution.ui.RunContentDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.getBuildConfiguration
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildConfiguration
-import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowEnabled
+import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowAvailable
 import org.rust.cargo.runconfig.buildtool.cargoPatches
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.cargo.runconfig.command.hasRemoteTarget
 import org.rust.cargo.toolchain.impl.CompilerArtifactMessage
 import org.rust.cargo.toolchain.tools.Cargo.Companion.getCargoCommonPatch
 import org.rust.cargo.util.CargoArgsParser.Companion.parseArgs
@@ -30,13 +32,14 @@ import org.rust.stdext.toPath
 import java.util.concurrent.CompletableFuture
 
 abstract class RsExecutableRunner(
-    private val executorId: String,
+    protected val executorId: String,
     private val errorMessageTitle: String
 ) : RsDefaultProgramRunnerBase() {
     override fun canRun(executorId: String, profile: RunProfile): Boolean {
-        if (executorId != this.executorId || profile !is CargoCommandConfiguration ||
-            profile.clean() !is CargoCommandConfiguration.CleanConfiguration.Ok) return false
-        return profile.isBuildToolWindowEnabled &&
+        if (executorId != this.executorId || profile !is CargoCommandConfiguration) return false
+        if (profile.clean().ok == null) return false
+        return !profile.hasRemoteTarget &&
+            profile.isBuildToolWindowAvailable &&
             !isBuildConfiguration(profile) &&
             getBuildConfiguration(profile) != null
     }
@@ -54,21 +57,27 @@ abstract class RsExecutableRunner(
             return
         }
         environment.cargoPatches += getCargoCommonPatch(project)
-        environment.putUserData(ARTIFACT, CompletableFuture())
+        environment.putUserData(ARTIFACTS, CompletableFuture())
         super.execute(environment)
     }
 
     override fun doExecute(state: RunProfileState, environment: ExecutionEnvironment): RunContentDescriptor? {
         if (state !is CargoRunStateBase) return null
 
-        val artifact = environment.artifact
+        val artifacts = environment.artifacts.orEmpty()
+        val artifact = artifacts.firstOrNull()
         val binaries = artifact?.executables.orEmpty()
-        val errorMessage = when {
-            binaries.isEmpty() -> "Can't find a binary."
-            binaries.size > 1 -> "More than one binary was produced. " +
+
+        @Suppress("UnstableApiUsage")
+        @DialogMessage
+        fun checkErrors(items: List<Any>, itemName: String): String? = when {
+            items.isEmpty() -> "Can't find a $itemName."
+            items.size > 1 -> "More than one $itemName was produced. " +
                 "Please specify `--bin`, `--lib`, `--test` or `--example` flag explicitly."
             else -> null
         }
+
+        val errorMessage = checkErrors(artifacts, "artifact") ?: checkErrors(binaries, "binary")
         if (errorMessage != null) {
             environment.project.showErrorDialog(errorMessage)
             return null
@@ -80,7 +89,7 @@ abstract class RsExecutableRunner(
                 .firstOrNull { it.origin == PackageOrigin.WORKSPACE }
         }
 
-        val runCargoCommand = state.prepareCommandLine()
+        val runCargoCommand = state.prepareCommandLine().copy(emulateTerminal = false)
         val workingDirectory = pkg?.rootDirectory
             ?.takeIf { runCargoCommand.command == "test" }
             ?: runCargoCommand.workingDirectory
@@ -121,18 +130,18 @@ abstract class RsExecutableRunner(
         project.showErrorDialog(toolchainError.message)
     }
 
-    private fun Project.showErrorDialog(message: String) {
+    private fun Project.showErrorDialog(@Suppress("UnstableApiUsage") @DialogMessage message: String) {
         Messages.showErrorDialog(this, message, errorMessageTitle)
     }
 
     companion object {
-        private val ARTIFACT: Key<CompletableFuture<CompilerArtifactMessage>> =
-            Key.create("CARGO.CONFIGURATION.ARTIFACT")
+        private val ARTIFACTS: Key<CompletableFuture<List<CompilerArtifactMessage>>> =
+            Key.create("CARGO.CONFIGURATION.ARTIFACTS")
 
-        var ExecutionEnvironment.artifact: CompilerArtifactMessage?
-            get() = getUserData(this@Companion.ARTIFACT)?.get()
+        var ExecutionEnvironment.artifacts: List<CompilerArtifactMessage>?
+            get() = getUserData(this@Companion.ARTIFACTS)?.get()
             set(value) {
-                getUserData(this@Companion.ARTIFACT)?.complete(value)
+                getUserData(this@Companion.ARTIFACTS)?.complete(value)
             }
     }
 }

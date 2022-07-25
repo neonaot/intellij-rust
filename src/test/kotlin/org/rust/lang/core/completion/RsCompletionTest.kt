@@ -6,7 +6,6 @@
 package org.rust.lang.core.completion
 
 import org.rust.*
-import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 
 class RsCompletionTest : RsCompletionTestBase() {
     fun `test local variable`() = doSingleCompletion("""
@@ -163,13 +162,13 @@ class RsCompletionTest : RsCompletionTestBase() {
         pub struct Foo;
 
         mod m {
-            use F/*caret*/;
+            use crate::F/*caret*/;
         }
     """, """
         pub struct Foo;
 
         mod m {
-            use Foo/*caret*/;
+            use crate::Foo/*caret*/;
         }
     """)
 
@@ -421,9 +420,9 @@ class RsCompletionTest : RsCompletionTestBase() {
         pub enum Spam { Quux, Eggs }
 
     //- foo/mod.rs
-        use Spam::Qu/*caret*/;
+        use crate::Spam::Qu/*caret*/;
     """, """
-        use Spam::Quux/*caret*/;
+        use crate::Spam::Quux/*caret*/;
     """)
 
     fun `test enum variant`() = doSingleCompletion("""
@@ -574,7 +573,6 @@ class RsCompletionTest : RsCompletionTestBase() {
         }
     """)
 
-    @MockEdition(Edition.EDITION_2018)
     fun `test complete macro 3`() = checkContainsCompletion("foobar1", """
         mod inner {
             macro_rules! foobar1 { () => {} }
@@ -642,6 +640,32 @@ class RsCompletionTest : RsCompletionTestBase() {
         macro_rules! foo_bar { () => () }
         fn foo/*caret*/() {
         }
+    """)
+
+    fun `test complete macro2`() = doSingleCompletion("""
+        macro foo() {}
+        fn main() {
+            fo/*caret*/
+        }
+    """, """
+        macro foo() {}
+        fn main() {
+            foo!(/*caret*/)
+        }
+    """)
+
+    fun `test complete macro2 in use statement`() = doSingleCompletion("""
+        pub mod bar {
+            pub macro foo() {}
+        }
+
+        use bar::fo/*caret*/
+    """, """
+        pub mod bar {
+            pub macro foo() {}
+        }
+
+        use bar::foo;/*caret*/
     """)
 
     // https://github.com/intellij-rust/intellij-rust/issues/1598
@@ -901,6 +925,18 @@ class RsCompletionTest : RsCompletionTestBase() {
         }
     """)
 
+    fun `test complete const parameters in let binding`() = doSingleCompletion("""
+        struct Frobnicate<const N: u32>(u32);
+        fn main() {
+            let x: Frob/*caret*/
+        }
+    """, """
+        struct Frobnicate<const N: u32>(u32);
+        fn main() {
+            let x: Frobnicate</*caret*/>
+        }
+    """)
+
     fun `test complete type parameters in parameter`() = doSingleCompletion("""
         struct Frobnicate<T>(T);
         fn foo(a: Frob/*caret*/) {}
@@ -971,13 +1007,13 @@ class RsCompletionTest : RsCompletionTestBase() {
         use a::Frobnicate;/*caret*/
     """)
 
-    fun `test don't complete type arguments if all type parameters have a default`() = doSingleCompletion("""
-        struct Frobnicate<T=u32,R=i32>(T, R);
+    fun `test don't complete type arguments if all generic parameters have a default 1`() = doSingleCompletion("""
+        struct Frobnicate<T = u32, R = i32, const N: u32 = 0, const M: u32 = 1>(T, R);
         fn main() {
             let x: Frob/*caret*/
         }
     """, """
-        struct Frobnicate<T=u32,R=i32>(T, R);
+        struct Frobnicate<T = u32, R = i32, const N: u32 = 0, const M: u32 = 1>(T, R);
         fn main() {
             let x: Frobnicate/*caret*/
         }
@@ -1011,6 +1047,7 @@ class RsCompletionTest : RsCompletionTestBase() {
         fn foo(f: &FnOnce(/*caret*/)) {}
     """)
 
+    @CheckTestmarkHit(Testmarks.DoNotAddOpenParenCompletionChar::class)
     fun `test do not insert second parenthesis 1`() = checkCompletion("foo", """
         fn foo() {}
         fn foo2() {}
@@ -1023,8 +1060,9 @@ class RsCompletionTest : RsCompletionTestBase() {
         fn main() {
             foo()/*caret*/
         }
-    """, completionChar = '(', testmark = Testmarks.doNotAddOpenParenCompletionChar)
+    """, completionChar = '(')
 
+    @CheckTestmarkHit(Testmarks.DoNotAddOpenParenCompletionChar::class)
     fun `test do not insert second parenthesis 2`() = checkCompletion("V1", """
         enum E {
             V1(i32),
@@ -1041,18 +1079,18 @@ class RsCompletionTest : RsCompletionTestBase() {
         fn main() {
             E::V1(/*caret*/)
         }
-    """, completionChar = '(', testmark = Testmarks.doNotAddOpenParenCompletionChar)
+    """, completionChar = '(')
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @CheckTestmarkHit(Testmarks.DoNotAddOpenParenCompletionChar::class)
     fun `test do not insert second parenthesis 3`() = checkCompletion("FnOnce", """
         struct FnOnceStruct;
         fn foo(f: FnOnce/*caret*/) {}
     """, """
         struct FnOnceStruct;
         fn foo(f: FnOnce(/*caret*/)) {}
-    """, completionChar = '(', testmark = Testmarks.doNotAddOpenParenCompletionChar)
+    """, completionChar = '(')
 
-    @MockEdition(Edition.EDITION_2018)
     @MockAdditionalCfgOptions("intellij_rust")
     fun `test completion cfg-disabled item 1`() = checkNoCompletionByFileTree("""
     //- main.rs
@@ -1065,8 +1103,6 @@ class RsCompletionTest : RsCompletionTestBase() {
         pub fn func() {}
     """)
 
-    @UseNewResolve
-    @MockEdition(Edition.EDITION_2018)
     @MockAdditionalCfgOptions("intellij_rust")
     fun `test completion cfg-disabled item 2`() = doSingleCompletionByFileTree("""
     //- main.rs
@@ -1144,18 +1180,17 @@ class RsCompletionTest : RsCompletionTestBase() {
             pub enum MyOtherEnum { Variant(i32) }
             pub fn foo(e: MyOtherEnum) {}
         }
-        use anothermod::foo;
+        use crate::anothermod::foo;
         fn main() { foo(MyOther/*caret*/) }
     """, """
         mod anothermod {
             pub enum MyOtherEnum { Variant(i32) }
             pub fn foo(e: MyOtherEnum) {}
         }
-        use anothermod::{foo, MyOtherEnum};
+        use crate::anothermod::{foo, MyOtherEnum};
         fn main() { foo(MyOtherEnum::Variant(/*caret*/)) }
     """)
 
-    @MockEdition(Edition.EDITION_2018)
     fun `test do not complete non-mod items in vis restriction path`() = checkNoCompletion("""
         pub mod bar {
             pub mod foo {
@@ -1165,7 +1200,6 @@ class RsCompletionTest : RsCompletionTestBase() {
         pub struct Item;
     """)
 
-    @MockEdition(Edition.EDITION_2018)
     fun `test do not complete non-ancestor mods in vis restriction path`() = checkNoCompletion("""
         pub mod bar {
             pub mod foo {
@@ -1175,7 +1209,6 @@ class RsCompletionTest : RsCompletionTestBase() {
         pub mod foo {}
     """)
 
-    @MockEdition(Edition.EDITION_2018)
     fun `test complete ancestor module in vis restriction path`() = doFirstCompletion("""
         pub mod bar {
             pub mod foo {

@@ -11,12 +11,12 @@ import com.intellij.execution.RunManager
 import com.intellij.execution.RunnerAndConfigurationSettings
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.filters.Filter
-import com.intellij.execution.process.ProcessTerminatedListener
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.ui.RunContentManager
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.NlsContexts.DialogMessage
 import org.jdom.Element
 import org.rust.cargo.project.model.CargoProject
 import org.rust.cargo.project.model.cargoProjects
@@ -24,10 +24,9 @@ import org.rust.cargo.project.settings.rustSettings
 import org.rust.cargo.project.toolwindow.CargoToolWindow
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
 import org.rust.cargo.runconfig.command.CargoCommandConfigurationType
-import org.rust.cargo.runconfig.filters.RsBacktraceFilter
-import org.rust.cargo.runconfig.filters.RsConsoleFilter
-import org.rust.cargo.runconfig.filters.RsExplainFilter
-import org.rust.cargo.runconfig.filters.RsPanicFilter
+import org.rust.cargo.runconfig.filters.*
+import org.rust.cargo.runconfig.target.startProcess
+import org.rust.cargo.runconfig.target.targetEnvironment
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.toolchain.tools.cargo
 import org.rust.openapiext.checkIsDispatchThread
@@ -97,6 +96,7 @@ fun createFilters(cargoProject: CargoProject?): Collection<Filter> = buildList {
     val dir = cargoProject?.workspaceRootDir ?: cargoProject?.rootDir
     if (cargoProject != null && dir != null) {
         add(RsConsoleFilter(cargoProject.project, dir))
+        add(RsDbgFilter(cargoProject.project, dir))
         add(RsPanicFilter(cargoProject.project, dir))
         add(RsBacktraceFilter(cargoProject.project, dir, cargoProject.workspace))
     }
@@ -125,7 +125,7 @@ fun addFormatJsonOption(additionalArguments: MutableList<String>, formatOption: 
 
 sealed class BuildResult {
     data class Binaries(val paths: List<String>) : BuildResult()
-    sealed class ToolchainError(val message: String) : BuildResult() {
+    sealed class ToolchainError(@Suppress("UnstableApiUsage") @DialogMessage val message: String) : BuildResult() {
         // TODO: move into bundle
         object UnsupportedMSVC : ToolchainError("MSVC toolchain is not supported. Please use GNU toolchain.")
         object UnsupportedGNU : ToolchainError("GNU toolchain is not supported. Please use MSVC toolchain.")
@@ -190,15 +190,13 @@ fun CargoRunStateBase.executeCommandLine(
     environment: ExecutionEnvironment
 ): DefaultExecutionResult {
     val runConfiguration = runConfiguration
+    val targetEnvironment = runConfiguration.targetEnvironment
     val context = ConfigurationExtensionContext()
 
     val extensionManager = RsRunConfigurationExtensionManager.getInstance()
     extensionManager.patchCommandLine(runConfiguration, environment, commandLine, context)
     extensionManager.patchCommandLineState(runConfiguration, environment, this, context)
-
-    val handler = RsProcessHandler(commandLine)
-    ProcessTerminatedListener.attach(handler) // shows exit code upon termination
-
+    val handler = commandLine.startProcess(environment.project, targetEnvironment, processColors = true, uploadExecutable = true)
     extensionManager.attachExtensionsToProcess(runConfiguration, handler, environment, context)
 
     val console = consoleBuilder.console

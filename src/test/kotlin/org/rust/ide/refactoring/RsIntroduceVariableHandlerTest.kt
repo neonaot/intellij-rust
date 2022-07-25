@@ -5,12 +5,10 @@
 
 package org.rust.ide.refactoring
 
-import com.intellij.openapiext.Testmark
 import org.intellij.lang.annotations.Language
-import org.rust.ProjectDescriptor
-import org.rust.RsTestBase
-import org.rust.WithStdlibRustProjectDescriptor
+import org.rust.*
 import org.rust.ide.refactoring.introduceVariable.IntroduceVariableTestmarks
+import org.rust.lang.core.macros.MacroExpansionScope
 import org.rust.lang.core.psi.RsExpr
 
 
@@ -46,6 +44,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
         fn main() {
             let _ = {
                 let i = 1;
+                i
             };
         }
     """)
@@ -61,7 +60,31 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
         }
     """)
 
+    fun `test extract block expr stmt`() = doTest("""
+        fn f() -> u32 {
+            /*caret*/{ 4 }
+            5
+        }
+    """, emptyList(), 0, """
+        fn f() -> u32 {
+            let i = { 4 };
+            5
+        }
+    """)
+
+    fun `test extract block expr return`() = doTest("""
+        fn f() -> u32 {
+            /*caret*/{ 4 }
+        }
+    """, emptyList(), 0, """
+        fn f() -> u32 {
+            let i = { 4 };
+            i
+        }
+    """)
+
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test replace occurrences forward`() = doTest("""
         fn hello() {
             foo(5 + /*caret*/10);
@@ -76,6 +99,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
     """, replaceAll = true)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
     fun `test replace occurrences backward`() = doTest("""
         fn main() {
             let a = 1;
@@ -91,6 +115,44 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
         }
     """, replaceAll = true)
 
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
+    fun `test replace occurrences backward for expr stmt`() = doTest("""
+        fn main() {
+            let a = 1;
+            let b = a + 1;
+            a + /*caret*/1;
+        }
+    """, listOf("1", "a + 1"), 1, """
+        fn main() {
+            let a = 1;
+            let i = a + 1;
+            let b = i;
+            i;
+        }
+    """, replaceAll = true)
+
+    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    @ExpandMacros(MacroExpansionScope.ALL, "std")
+    fun `test replace occurrences backward for returned expr`() = doTest("""
+        fn main() {
+            let _ = {
+                let a = 1;
+                let b = a + 1;
+                a + /*caret*/1
+            };
+        }
+    """, listOf("1", "a + 1"), 1, """
+        fn main() {
+            let _ = {
+                let a = 1;
+                let i = a + 1;
+                let b = i;
+                i
+            };
+        }
+    """, replaceAll = true)
+
     fun `test statement`() = doTest("""
         fn hello() {
             foo(5 + /*caret*/10);
@@ -103,7 +165,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
 
     fun `test match`() = doTest("""
         fn bar() {
-            ma/*caret*/tch 5 {
+            /*caret*/match 5 {
                 2 => 2,
                 _ => 8,
             };
@@ -118,12 +180,13 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
     """)
 
     fun `test file`() = doTest("""
-        fn read_fle() -> Result<Vec<String, io::Error>> {
-            File::op/*caret*/en("res/input.txt")?
+        fn read_file() -> Result<File, io::Error> {
+            File::/*caret*/open("res/input.txt")?
         }
     """, listOf("File::open(\"res/input.txt\")", "File::open(\"res/input.txt\")?"), 1, """
-        fn read_fle() -> Result<Vec<String, io::Error>> {
+        fn read_file() -> Result<File, io::Error> {
             let x = File::open("res/input.txt")?;
+            x
         }
     """)
 
@@ -161,6 +224,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
         }
     """)
 
+    @CheckTestmarkHit(IntroduceVariableTestmarks.InvalidNamePart::class)
     fun `test tuple struct`() = doTest("""
         pub struct NodeType(pub u32);
 
@@ -182,7 +246,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
             let node_type = t.ty;
             foo(node_type)
         }
-    """, mark = IntroduceVariableTestmarks.invalidNamePart)
+    """)
 
     // https://github.com/intellij-rust/intellij-rust/issues/2919
     fun `test issue2919`() = doTest("""
@@ -302,13 +366,120 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
         }
     """)
 
+    fun `test lambda has no braces 1`() = doTest("""
+        fn main() {
+            Some(1).map(|x| <selection>x</selection> + 1);
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            Some(1).map(|x| {
+                let x1 = x;
+                x1 + 1
+            });
+        }
+    """)
+
+    fun `test lambda has no braces 2`() = doTest("""
+        fn main() {
+            Some(1).map(|_| <selection>x</selection> + 1);
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            Some(1).map(|_| {
+                let x1 = x;
+                x1 + 1
+            });
+        }
+    """)
+
+    fun `test lambda has no braces multiple`() = doTest("""
+        fn main() {
+            Some(1).map(|x| <selection>x</selection> + x);
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            Some(1).map(|x| {
+                let x1 = x;
+                x1 + x1
+            });
+        }
+    """, replaceAll = true)
+
+    fun `test lambda scoping 1`() = doTest("""
+        fn main() {
+            let _ = <selection>false</selection>;
+            || false;
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            let x = false;
+            let _ = x;
+            || x;
+        }
+    """, replaceAll = true)
+
+    fun `test lambda scoping 2`() = doTest("""
+        fn main() {
+            let _ = false;
+            || <selection>false</selection>;
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            let x = false;
+            let _ = x;
+            || x;
+        }
+    """, replaceAll = true)
+
+    fun `test lambda scoping 3`() = doTest("""
+        fn main() {
+            || false;
+            let _ = <selection>false</selection>;
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            let x = false;
+            || x;
+            let _ = x;
+        }
+    """, replaceAll = true)
+
+    fun `test lambda scoping 4`() = doTest("""
+        fn main() {
+            || <selection>false</selection>;
+            let _ = false;
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            let x = false;
+            || x;
+            let _ = x;
+        }
+    """, replaceAll = true)
+
+    fun `test lambda has no braces with match expr`() = doTest("""
+        fn main() {
+            Some(1).map(|x| match <selection>x</selection> {
+                _ => 0,
+            });
+        }
+    """, emptyList(), 0, """
+        fn main() {
+            Some(1).map(|x| {
+                let x1 = x;
+                match x1 {
+                    _ => 0,
+                }
+            });
+        }
+    """)
+
     private fun doTest(
         @Language("Rust") before: String,
         expressions: List<String>,
         target: Int,
         @Language("Rust") after: String,
         replaceAll: Boolean = false,
-        mark: Testmark? = null
     ) {
         var shownTargetChooser = false
         withMockTargetExpressionChooser(object : ExtractExpressionUi {
@@ -321,7 +492,7 @@ class RsIntroduceVariableHandlerTest : RsTestBase() {
             override fun chooseOccurrences(expr: RsExpr, occurrences: List<RsExpr>): List<RsExpr> =
                 if (replaceAll) occurrences else listOf(expr)
         }) {
-            checkEditorAction(before, after, "IntroduceVariable", testmark = mark)
+            checkEditorAction(before, after, "IntroduceVariable")
             check(expressions.isEmpty() || shownTargetChooser) {
                 "Chooser isn't shown"
             }

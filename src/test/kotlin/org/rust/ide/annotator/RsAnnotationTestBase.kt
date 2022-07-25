@@ -5,11 +5,14 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.openapiext.Testmark
+import com.intellij.openapi.project.Project
+import com.intellij.psi.util.parentOfType
 import com.intellij.testFramework.fixtures.impl.CodeInsightTestFixtureImpl
 import org.intellij.lang.annotations.Language
 import org.rust.RsTestBase
 import org.rust.fileTreeFromText
+import org.rust.lang.core.psi.RsCodeFragment
+import org.rust.lang.core.psi.ext.RsElement
 
 abstract class RsAnnotationTestBase : RsTestBase() {
 
@@ -41,8 +44,7 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkInfo: Boolean = false,
         checkWeakWarn: Boolean = false,
         ignoreExtraHighlighting: Boolean = false,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkByText(text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, testmark)
+    ) = annotationFixture.checkByText(text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting)
 
     protected fun checkFixByText(
         fixName: String,
@@ -51,15 +53,13 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkWarn: Boolean = true,
         checkInfo: Boolean = false,
         checkWeakWarn: Boolean = false,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixByText(fixName, before, after, checkWarn, checkInfo, checkWeakWarn, testmark)
+    ) = annotationFixture.checkFixByText(fixName, before, after, checkWarn, checkInfo, checkWeakWarn)
 
     protected fun checkFixByTextWithoutHighlighting(
         fixName: String,
         @Language("Rust") before: String,
         @Language("Rust") after: String,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixByTextWithoutHighlighting(fixName, before, after, testmark)
+    ) = annotationFixture.checkFixByTextWithoutHighlighting(fixName, before, after)
 
     protected fun checkByFileTree(
         @Language("Rust") text: String,
@@ -68,8 +68,7 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkWeakWarn: Boolean = false,
         ignoreExtraHighlighting: Boolean = false,
         stubOnly: Boolean = true,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkByFileTree(text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, stubOnly, testmark)
+    ) = annotationFixture.checkByFileTree(text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, stubOnly)
 
     protected fun checkFixByFileTree(
         fixName: String,
@@ -79,16 +78,29 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkInfo: Boolean = false,
         checkWeakWarn: Boolean = false,
         stubOnly: Boolean = true,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixByFileTree(fixName, before, after, checkWarn, checkInfo, checkWeakWarn, stubOnly, testmark)
+    ) = annotationFixture.checkFixByFileTree(fixName, before, after, checkWarn, checkInfo, checkWeakWarn, stubOnly)
 
     protected fun checkFixByFileTreeWithoutHighlighting(
         fixName: String,
         @Language("Rust") before: String,
         @Language("Rust") after: String,
         stubOnly: Boolean = true,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixByFileTreeWithoutHighlighting(fixName, before, after, stubOnly, testmark)
+    ) = annotationFixture.checkFixByFileTreeWithoutHighlighting(fixName, before, after, stubOnly)
+
+    protected fun checkFixByTextWithLiveTemplate(
+        fixName: String,
+        @Language("Rust") before: String,
+        toType: String,
+        @Language("Rust") after: String,
+        fileName: String = "main.rs",
+        checkWarn: Boolean = true,
+        checkInfo: Boolean = false,
+        checkWeakWarn: Boolean = false
+    ) {
+        checkByTextWithLiveTemplate(before, after.trimIndent(), toType, fileName) {
+            annotationFixture.checkFixPartial(fixName, before, checkWarn, checkInfo, checkWeakWarn)
+        }
+    }
 
     protected fun checkFixIsUnavailable(
         fixName: String,
@@ -97,8 +109,7 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkInfo: Boolean = false,
         checkWeakWarn: Boolean = false,
         ignoreExtraHighlighting: Boolean = false,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixIsUnavailable(fixName, text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, testmark)
+    ) = annotationFixture.checkFixIsUnavailable(fixName, text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting)
 
     protected fun checkFixIsUnavailableByFileTree(
         fixName: String,
@@ -108,8 +119,7 @@ abstract class RsAnnotationTestBase : RsTestBase() {
         checkWeakWarn: Boolean = false,
         ignoreExtraHighlighting: Boolean = false,
         stubOnly: Boolean = true,
-        testmark: Testmark? = null
-    ) = annotationFixture.checkFixIsUnavailableByFileTree(fixName, text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, stubOnly, testmark)
+    ) = annotationFixture.checkFixIsUnavailableByFileTree(fixName, text, checkWarn, checkInfo, checkWeakWarn, ignoreExtraHighlighting, stubOnly)
 
     protected fun checkDontTouchAstInOtherFiles(@Language("Rust") text: String, checkInfo: Boolean = false, filePath: String? = null) {
         fileTreeFromText(text).create()
@@ -119,5 +129,20 @@ abstract class RsAnnotationTestBase : RsTestBase() {
 
         myFixture.configureFromTempProjectFile(testFilePath)
         myFixture.testHighlighting(false, checkInfo, false)
+    }
+
+    protected fun checkByCodeFragment(
+        @Language("Rust") context: String,
+        fragment: String,
+        fragmentConstructor: (Project, String, RsElement) -> RsCodeFragment,
+        checkWarn: Boolean = true,
+        checkInfo: Boolean = false,
+        checkWeakWarn: Boolean = false
+    ) {
+        InlineFile(context).withCaret()
+        val contextElement = myFixture.file.findElementAt(myFixture.caretOffset)?.parentOfType<RsElement>()!!
+        val codeFragment = fragmentConstructor(project, fragment, contextElement)
+        myFixture.configureFromExistingVirtualFile(codeFragment.virtualFile)
+        myFixture.testHighlighting(checkWarn, checkInfo, checkWeakWarn)
     }
 }

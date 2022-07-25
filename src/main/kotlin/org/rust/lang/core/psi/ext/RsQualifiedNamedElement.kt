@@ -245,10 +245,14 @@ data class RsQualifiedName private constructor(
                 element.containingCrate?.normName ?: return null
             }
 
-            val modSegments = if (parentType == PRIMITIVE || parentType == KEYWORD || parentType == MACRO) {
+            val parentElement = parentItem.element
+            val withoutModSegments = parentType == PRIMITIVE ||
+                parentType == KEYWORD ||
+                parentType == MACRO && parentElement is RsMacro
+            val modSegments = if (withoutModSegments) {
                 emptyList()
             } else {
-                val parentElement = parentItem.element ?: return null
+                if (parentElement == null) return null
                 val mod = parentElement as? RsMod ?: parentElement.containingMod
                 mod.superMods
                     .asReversed()
@@ -265,7 +269,7 @@ data class RsQualifiedName private constructor(
             val modSegments = mutableListOf<String>()
 
             val (parentItem, childItem) = qualifiedNamedItem.item.toItems() ?: return null
-            if (parentItem.type != MACRO) {
+            if (parentItem.type != MACRO || parentItem.element is RsMacro2) {
                 qualifiedNamedItem.superMods
                     ?.asReversed()
                     ?.drop(1)
@@ -511,14 +515,39 @@ data class RsQualifiedName private constructor(
     }
 }
 
-sealed class QualifiedNamedItem(val item: RsQualifiedNamedElement) {
+interface QualifiedNamedItemBase {
+    val item: RsQualifiedNamedElement
+    val itemName: String?
+    val parentCrateRelativePath: String?
+    val containingCrate: Crate?
+}
 
-    abstract val itemName: String?
+class QualifiedNamedItem2(
+    override val item: RsQualifiedNamedElement,
+    /**
+     * First segment is crate name (can be "crate").
+     * Last segment is item name.
+     */
+    val path: Array<String>,
+    /** corresponds to `path.first()` */
+    override val containingCrate: Crate,
+) : QualifiedNamedItemBase {
+    override val itemName: String
+        get() = path.last()
+    override val parentCrateRelativePath: String
+        get() = path.copyOfRange(1, path.size - 1).joinToString("::")
+
+    override fun toString(): String = path.joinToString("::")
+}
+
+sealed class QualifiedNamedItem(final override val item: RsQualifiedNamedElement) : QualifiedNamedItemBase {
+
+    abstract override val itemName: String?
     abstract fun isVisibleFrom(mod: RsMod): Boolean
     abstract val superMods: List<ModWithName>?
-    abstract val containingCrate: Crate?
+    abstract override val containingCrate: Crate?
 
-    val parentCrateRelativePath: String?
+    override val parentCrateRelativePath: String?
         get() {
             val path = superMods
                 ?.map { it.modName ?: return null }

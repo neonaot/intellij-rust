@@ -6,10 +6,8 @@
 package org.rust.ide.docs
 
 import junit.framework.AssertionFailedError
-import org.rust.MockEdition
 import org.rust.ProjectDescriptor
 import org.rust.WithStdlibRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
 
 @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
 class RsExternalDocUrlStdTest : RsDocumentationProviderTest() {
@@ -97,11 +95,11 @@ class RsExternalDocUrlStdTest : RsDocumentationProviderTest() {
     """, "https://doc.rust-lang.org/core/option/enum.Option.html#variant.Some")
 
     fun `test struct field`() = doUrlTestByText("""
-        fn foo(x: std::raw::TraitObject) {
-            let data = x.data;
+        fn foo(x: std::process::Child) {
+            let stdin = x.stdin;
                          //^
         }
-    """, "https://doc.rust-lang.org/core/raw/struct.TraitObject.html#structfield.data")
+    """, "https://doc.rust-lang.org/std/process/struct.Child.html#structfield.stdin")
 
     fun `test primitive type`() = doUrlTestByText("""
         fn foo() -> bool {}
@@ -120,7 +118,6 @@ class RsExternalDocUrlStdTest : RsDocumentationProviderTest() {
         }
     """, "https://doc.rust-lang.org/std/keyword.true.html")
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test await`() = doUrlTestByText("""
         fn main() {
             foo().await;

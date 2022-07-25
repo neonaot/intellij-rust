@@ -9,7 +9,7 @@ import com.intellij.codeInsight.editorActions.moveLeftRight.MoveElementLeftRight
 import com.intellij.psi.PsiElement
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.arrayElements
-import org.rust.lang.core.psi.ext.genericParameterList
+import org.rust.lang.core.psi.ext.getGenericParameters
 
 class RsMoveLeftRightHandler : MoveElementLeftRightHandler() {
 
@@ -24,11 +24,12 @@ class RsMoveLeftRightHandler : MoveElementLeftRightHandler() {
             is RsTupleType -> element.typeReferenceList
             is RsTupleFields -> element.tupleFieldDeclList
             is RsTypeParamBounds -> element.polyboundList
-            is RsTypeParameterList -> element.genericParameterList
+            is RsTypeParameterList -> element.getGenericParameters()
             is RsUseGroup -> element.useSpeckList
             is RsValueArgumentList -> element.exprList
             is RsValueParameterList -> element.valueParameterList
             is RsVecMacroArgument -> if (element.semicolon == null) element.exprList else emptyList()
+            is RsWhereClause -> element.wherePredList
             else -> return PsiElement.EMPTY_ARRAY
         }
         return subElements.toTypedArray()

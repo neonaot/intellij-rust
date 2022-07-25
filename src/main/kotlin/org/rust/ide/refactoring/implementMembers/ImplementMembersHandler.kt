@@ -8,11 +8,11 @@ package org.rust.ide.refactoring.implementMembers
 import com.intellij.lang.LanguageCodeInsightActionHandler
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiFile
 import org.rust.lang.core.psi.RsFile
 import org.rust.lang.core.psi.RsImplItem
 import org.rust.lang.core.psi.ext.ancestorOrSelf
+import org.rust.openapiext.Testmark
 
 class ImplementMembersHandler : LanguageCodeInsightActionHandler {
     override fun isValidFor(editor: Editor, file: PsiFile): Boolean {
@@ -21,7 +21,7 @@ class ImplementMembersHandler : LanguageCodeInsightActionHandler {
         val elementAtCaret = file.findElementAt(editor.caretModel.offset)
         val classOrObject = elementAtCaret?.ancestorOrSelf<RsImplItem>()
         return if (classOrObject == null) {
-            ImplementMembersMarks.noImplInHandler.hit()
+            ImplementMembersMarks.NoImplInHandler.hit()
             false
         } else {
             true
@@ -40,6 +40,6 @@ class ImplementMembersHandler : LanguageCodeInsightActionHandler {
 }
 
 object ImplementMembersMarks {
-    val noImplInHandler = Testmark("noImplInHandler")
+    object NoImplInHandler : Testmark()
 }
 

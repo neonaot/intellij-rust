@@ -6,42 +6,63 @@
 package org.rust.ide.utils.import
 
 import com.intellij.openapi.project.Project
-import com.intellij.psi.search.GlobalSearchScope
-import org.rust.ide.search.RsWithMacrosProjectScope
 import org.rust.lang.core.parser.RustParserUtil
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
+import org.rust.lang.core.resolve.Namespace
+import org.rust.lang.core.resolve.namespaces
+import org.rust.lang.core.resolve2.CrateDefMap
+import org.rust.lang.core.resolve2.ModData
+import org.rust.lang.core.resolve2.RsModInfoBase
+import org.rust.lang.core.resolve2.getModInfo
 
-@Suppress("DataClassPrivateConstructor")
-data class ImportContext private constructor(
-    val project: Project,
-    val mod: RsMod,
-    val superMods: LinkedHashSet<RsMod>,
-    val scope: GlobalSearchScope,
-    val pathParsingMode: RustParserUtil.PathParsingMode,
-    val attributes: RsFile.Attributes,
-    val namespaceFilter: (RsQualifiedNamedElement) -> Boolean
+class ImportContext2 private constructor(
+    /** Info of mod in which auto-import or completion is called */
+    val rootInfo: RsModInfoBase.RsModInfo,
+    /** Mod in which auto-import or completion is called */
+    val rootMod: RsMod,
+    val type: Type,
+
+    val pathInfo: PathInfo?,
 ) {
-    companion object {
-        fun from(project: Project, path: RsPath, isCompletion: Boolean): ImportContext = ImportContext(
-            project = project,
-            mod = path.containingMod,
-            superMods = LinkedHashSet(path.containingMod.superMods),
-            scope = RsWithMacrosProjectScope(project),
-            pathParsingMode = path.pathParsingMode,
-            attributes = path.stdlibAttributes,
-            namespaceFilter = path.namespaceFilter(isCompletion)
-        )
+    val project: Project get() = rootInfo.project
+    val rootModData: ModData get() = rootInfo.modData
+    val rootDefMap: CrateDefMap get() = rootInfo.defMap
 
-        fun from(project: Project, element: RsElement): ImportContext = ImportContext(
-            project = project,
-            mod = element.containingMod,
-            superMods = LinkedHashSet(element.containingMod.superMods),
-            scope = RsWithMacrosProjectScope(project),
-            pathParsingMode = RustParserUtil.PathParsingMode.TYPE,
-            attributes = element.stdlibAttributes,
-            namespaceFilter = { true }
-        )
+    companion object {
+        fun from(path: RsPath, type: Type = Type.AUTO_IMPORT): ImportContext2? =
+            from(path, type, PathInfo.from(path, type == Type.COMPLETION))
+
+        fun from(context: RsElement, type: Type = Type.AUTO_IMPORT, pathInfo: PathInfo? = null): ImportContext2? {
+            val rootMod = context.containingMod
+            val info = getModInfo(rootMod) as? RsModInfoBase.RsModInfo ?: return null
+            return ImportContext2(info, rootMod, type, pathInfo)
+        }
+    }
+
+    enum class Type {
+        AUTO_IMPORT,
+        COMPLETION,
+        OTHER,
+    }
+
+    class PathInfo(
+        val rootPathText: String?,
+        val rootPathParsingMode: RustParserUtil.PathParsingMode?,
+        val rootPathAllowedNamespaces: Set<Namespace>?,
+        val namespaceFilter: (RsQualifiedNamedElement) -> Boolean,
+    ) {
+        companion object {
+            fun from(path: RsPath, isCompletion: Boolean): PathInfo {
+                val rootPath = path.rootPath().takeIf { it != path }
+                return PathInfo(
+                    rootPathText = rootPath?.text,
+                    rootPathParsingMode = rootPath?.pathParsingMode,
+                    rootPathAllowedNamespaces = rootPath?.allowedNamespaces(isCompletion),
+                    namespaceFilter = path.namespaceFilter(isCompletion),
+                )
+            }
+        }
     }
 }
 
@@ -51,7 +72,8 @@ private fun RsPath.namespaceFilter(isCompletion: Boolean): (RsQualifiedNamedElem
             is RsEnumItem,
             is RsStructItem,
             is RsTraitItem,
-            is RsTypeAlias -> true
+            is RsTypeAlias,
+            is RsMacroDefinitionBase -> true
             else -> false
         }
     }
@@ -61,12 +83,16 @@ private fun RsPath.namespaceFilter(isCompletion: Boolean): (RsQualifiedNamedElem
             // TODO: take into account fields type
             is RsFieldsOwner,
             is RsConstant,
-            is RsFunction -> true
+            is RsFunction,
+            is RsTypeAlias,
+            is RsMacroDefinitionBase -> true
             else -> false
         }
     }
     is RsTraitRef -> { e -> e is RsTraitItem }
-    is RsStructLiteral -> { e -> e is RsFieldsOwner && e.blockFields != null }
+    is RsStructLiteral -> { e ->
+        e is RsFieldsOwner && e.blockFields != null || e is RsTypeAlias
+    }
     is RsPatBinding -> { e ->
         when (e) {
             is RsEnumItem,
@@ -78,10 +104,12 @@ private fun RsPath.namespaceFilter(isCompletion: Boolean): (RsQualifiedNamedElem
             else -> false
         }
     }
+    is RsPath -> { e -> Namespace.Types in e.namespaces }
+    is RsMacroCall -> { e -> Namespace.Macros in e.namespaces }
     else -> { _ -> true }
 }
 
-private val RsPath.pathParsingMode: RustParserUtil.PathParsingMode
+val RsPath.pathParsingMode: RustParserUtil.PathParsingMode
     get() = when (parent) {
         is RsPathExpr,
         is RsStructLiteral,

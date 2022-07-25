@@ -88,7 +88,7 @@ class CargoTestNodeInfoTest : CargoTestRunnerTestBase() {
             """)
 
             dir("src") {
-                rust("main.rs", """
+                rust("lib.rs", """
                     #[test]
                     fn test() {
                         /*caret*/
@@ -103,12 +103,46 @@ class CargoTestNodeInfoTest : CargoTestRunnerTestBase() {
         configuration.command += " --unknown"
         val root = executeAndGetTestRoot(configuration)
         assertTrue("Testing started" in root.output)
-        assertTrue("Compiling sandbox" in root.output)
         assertTrue("warning: unused variable: `x`" in root.output)
         assertTrue("Finished" in root.output)
         assertTrue("Running" in root.output)
         assertTrue("error: Unrecognized option: 'unknown'" in root.output)
         assertTrue("Process finished" in root.output)
+        assertFalse(root.isTestsReporterAttached)
+    }
+
+    fun `test root output (no tests)`() {
+        val testProject = buildProject {
+            toml("Cargo.toml", """
+                [package]
+                name = "sandbox"
+                version = "0.1.0"
+                authors = []
+            """)
+
+            dir("src") {
+                rust("lib.rs", """
+                    #[cfg(tests)] // typo
+                    mod tests {
+                        #[test]
+                        fn test() {
+                            /*caret*/
+                            let x = 42;
+                        }
+                    }
+                """)
+            }
+        }
+
+        myFixture.configureFromTempProjectFile(testProject.fileWithCaret)
+        val configuration = createTestRunConfigurationFromContext()
+        val root = executeAndGetTestRoot(configuration)
+        assertTrue("Testing started" in root.output)
+        assertFalse("warning: unused variable: `x`" in root.output)
+        assertTrue("Finished" in root.output)
+        assertTrue("Running" in root.output)
+        assertTrue("Process finished" in root.output)
+        assertTrue(root.isTestsReporterAttached)
     }
 
     private fun checkErrors(

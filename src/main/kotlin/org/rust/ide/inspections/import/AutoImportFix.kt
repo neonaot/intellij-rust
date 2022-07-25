@@ -5,27 +5,33 @@
 
 package org.rust.ide.inspections.import
 
-import com.intellij.codeInsight.intention.HighPriorityAction
+import com.intellij.codeInsight.daemon.impl.ShowAutoImportPass
+import com.intellij.codeInsight.hint.HintManager
+import com.intellij.codeInsight.intention.PriorityAction
+import com.intellij.codeInspection.HintAction
 import com.intellij.codeInspection.LocalQuickFixOnPsiElement
 import com.intellij.ide.DataManager
 import com.intellij.openapi.actionSystem.DataContext
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import org.rust.ide.inspections.import.AutoImportFix.Type.*
+import org.rust.ide.settings.RsCodeInsightSettings
 import org.rust.ide.utils.import.ImportCandidate
-import org.rust.ide.utils.import.ImportCandidatesCollector
-import org.rust.ide.utils.import.ImportContext
+import org.rust.ide.utils.import.ImportCandidatesCollector2
+import org.rust.ide.utils.import.ImportContext2
 import org.rust.ide.utils.import.import
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.TYPES_N_VALUES
 import org.rust.lang.core.types.infer.ResolvedPath
 import org.rust.lang.core.types.inference
+import org.rust.openapiext.Testmark
 import org.rust.openapiext.runWriteCommandAction
 
-class AutoImportFix(element: RsElement, private val type: Type) : LocalQuickFixOnPsiElement(element), HighPriorityAction {
+class AutoImportFix(element: RsElement, private val context: Context) :
+    LocalQuickFixOnPsiElement(element), PriorityAction, HintAction {
 
     private var isConsumed: Boolean = false
 
@@ -34,18 +40,15 @@ class AutoImportFix(element: RsElement, private val type: Type) : LocalQuickFixO
 
     public override fun isAvailable(): Boolean = super.isAvailable() && !isConsumed
 
+    override fun getPriority(): PriorityAction.Priority = PriorityAction.Priority.TOP
+
     override fun invoke(project: Project, file: PsiFile, startElement: PsiElement, endElement: PsiElement) {
         invoke(project)
     }
 
-    fun invoke(project: Project) {
+    private fun invoke(project: Project) {
         val element = startElement as? RsElement ?: return
-        val (_, candidates) = when (type) {
-            GENERAL_PATH -> findApplicableContext(project, element as RsPath)
-            ASSOC_ITEM_PATH -> findApplicableContextForAssocItemPath(project, element as RsPath)
-            METHOD -> findApplicableContext(project, element as RsMethodCall)
-        } ?: return
-
+        val candidates = context.candidates
         if (candidates.size == 1) {
             project.runWriteCommandAction {
                 candidates.first().import(element)
@@ -71,11 +74,42 @@ class AutoImportFix(element: RsElement, private val type: Type) : LocalQuickFixO
         }
     }
 
+    override fun isAvailable(project: Project, editor: Editor?, file: PsiFile?): Boolean = isAvailable
+
+    override fun invoke(project: Project, editor: Editor?, file: PsiFile?) = invoke(project)
+
+    override fun startInWriteAction(): Boolean = true
+
+    override fun showHint(editor: Editor): Boolean {
+        if (!RsCodeInsightSettings.getInstance().showImportPopup) return false
+        if (HintManager.getInstance().hasShownHintsThatWillHideByOtherHint(true)) return false
+
+        val candidates = context.candidates
+        val hint = candidates[0].info.usePath
+        val multiple = candidates.size > 1
+        val message = ShowAutoImportPass.getMessage(multiple, hint)
+        val element = startElement
+        HintManager.getInstance().showQuestionHint(editor, message, element.textOffset, element.endOffset) {
+            invoke(element.project)
+            true
+        }
+        return true
+    }
+
+    override fun fixSilently(editor: Editor): Boolean {
+        if (!RsCodeInsightSettings.getInstance().addUnambiguousImportsOnTheFly) return false
+        val candidates = context.candidates
+        if (candidates.size != 1) return false
+        val project = editor.project ?: return false
+        invoke(project)
+        return true
+    }
+
     companion object {
 
         const val NAME = "Import"
 
-        fun findApplicableContext(project: Project, path: RsPath): Context? {
+        fun findApplicableContext(path: RsPath): Context? {
             if (path.reference == null) return null
 
             val basePath = path.basePath()
@@ -83,53 +117,52 @@ class AutoImportFix(element: RsElement, private val type: Type) : LocalQuickFixO
 
             if (path.ancestorStrict<RsUseSpeck>() != null) {
                 // Don't try to import path in use item
-                Testmarks.pathInUseItem.hit()
+                Testmarks.PathInUseItem.hit()
                 return null
             }
 
             val referenceName = basePath.referenceName ?: return null
 
-            val isNameInScope = path.hasInScope(referenceName, TYPES_N_VALUES)
+            val isNameInScope = path.hasInScope(referenceName, TYPES_N_VALUES) && path.parent !is RsMacroCall
             if (isNameInScope) {
                 // Don't import names that are already in scope but cannot be resolved
                 // because namespace of psi element prevents correct name resolution.
                 // It's possible for incorrect or incomplete code like "let map = HashMap"
-                Testmarks.nameInScope.hit()
+                Testmarks.NameInScope.hit()
                 return null
             }
 
-            val superPath = path.rootPath()
-            val candidates = ImportCandidatesCollector.getImportCandidates(
-                ImportContext.from(project, path, false),
-                referenceName,
-                superPath.text
-            ) {
-                superPath != basePath || !(it.item is RsMod || it.item is RsModDeclItem || it.item.parent is RsMembers)
-            }.toList()
+            val importContext = ImportContext2.from(path, ImportContext2.Type.AUTO_IMPORT) ?: return null
+            val candidates = ImportCandidatesCollector2.getImportCandidates(importContext, referenceName)
 
             return Context(GENERAL_PATH, candidates)
         }
 
-        fun findApplicableContext(project: Project, methodCall: RsMethodCall): Context? {
+        fun findApplicableContext(methodCall: RsMethodCall): Context? {
             val results = methodCall.inference?.getResolvedMethod(methodCall) ?: emptyList()
             if (results.isEmpty()) return Context(METHOD, emptyList())
-            val candidates = ImportCandidatesCollector.getImportCandidates(project, methodCall, results)?.toList() ?: return null
+            val candidates = ImportCandidatesCollector2.getImportCandidates(methodCall, results) ?: return null
             return Context(METHOD, candidates)
         }
 
         /** Import traits for type-related UFCS method calls and assoc items */
-        fun findApplicableContextForAssocItemPath(project: Project, path: RsPath): Context? {
+        fun findApplicableContextForAssocItemPath(path: RsPath): Context? {
             val parent = path.parent as? RsPathExpr ?: return null
 
+            // `std::default::Default::default()`
             val qualifierElement = path.qualifier?.reference?.resolve()
             if (qualifierElement is RsTraitItem) return null
+
+            // `<Foo as bar::Baz>::qux()`
+            val typeQual = path.typeQual
+            if (typeQual != null && typeQual.traitRef != null) return null
 
             val resolved = path.inference?.getResolvedPath(parent) ?: return null
             val sources = resolved.map {
                 if (it !is ResolvedPath.AssocItem) return null
                 it.source
             }
-            val candidates = ImportCandidatesCollector.getTraitImportCandidates(project, path, sources)?.toList() ?: return null
+            val candidates = ImportCandidatesCollector2.getTraitImportCandidates(path, sources) ?: return null
             return Context(ASSOC_ITEM_PATH, candidates)
         }
     }
@@ -146,7 +179,7 @@ class AutoImportFix(element: RsElement, private val type: Type) : LocalQuickFixO
     }
 
     object Testmarks {
-        val pathInUseItem = Testmark("pathInUseItem")
-        val nameInScope = Testmark("nameInScope")
+        object PathInUseItem : Testmark()
+        object NameInScope : Testmark()
     }
 }

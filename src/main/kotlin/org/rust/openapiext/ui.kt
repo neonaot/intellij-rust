@@ -17,16 +17,17 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.ui.TextComponentAccessor
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.NlsContexts.DialogTitle
 import com.intellij.ui.DocumentAdapter
-import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.Label
-import com.intellij.ui.layout.Row
-import com.intellij.ui.layout.RowBuilder
+import com.intellij.ui.dsl.builder.Cell
+import com.intellij.ui.dsl.builder.Row
+import com.intellij.ui.dsl.gridLayout.HorizontalAlign
 import com.intellij.util.Alarm
 import org.rust.lang.RsFileType
 import org.rust.lang.core.psi.ext.RsElement
+import javax.swing.JComponent
+import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
-import kotlin.reflect.KProperty
 
 class UiDebouncer(
     private val parentDisposable: Disposable,
@@ -54,7 +55,7 @@ class UiDebouncer(
 
 fun pathToDirectoryTextField(
     disposable: Disposable,
-    title: String,
+    @Suppress("UnstableApiUsage") @DialogTitle title: String,
     onTextChanged: () -> Unit = {}
 ): TextFieldWithBrowseButton =
     pathTextField(
@@ -66,7 +67,7 @@ fun pathToDirectoryTextField(
 
 fun pathToRsFileTextField(
     disposable: Disposable,
-    title: String,
+    @DialogTitle title: String,
     project: Project,
     onTextChanged: () -> Unit = {}
 ): TextFieldWithBrowseButton =
@@ -82,44 +83,27 @@ fun pathToRsFileTextField(
 fun pathTextField(
     fileChooserDescriptor: FileChooserDescriptor,
     disposable: Disposable,
-    title: String,
+    @DialogTitle title: String,
     onTextChanged: () -> Unit = {}
 ): TextFieldWithBrowseButton {
-
     val component = TextFieldWithBrowseButton(null, disposable)
     component.addBrowseFolderListener(
         title, null, null,
         fileChooserDescriptor,
         TextComponentAccessor.TEXT_FIELD_WHOLE_TEXT
     )
-    component.childComponent.document.addDocumentListener(object : DocumentAdapter() {
-        override fun textChanged(e: DocumentEvent) {
-            onTextChanged()
-        }
-    })
-
+    component.childComponent.addTextChangeListener { onTextChanged() }
     return component
 }
 
-class CheckboxDelegate(private val checkbox: JBCheckBox) {
-    operator fun getValue(thisRef: Any?, property: KProperty<*>): Boolean {
-        return checkbox.isSelected
-    }
-
-    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
-        checkbox.isSelected = value
-    }
-}
-
-fun RowBuilder.row(
-    labelText: String,
-    toolTip: String,
-    separated: Boolean = false,
-    init: Row.() -> Unit
-): Row {
-    val label = Label(labelText)
-    label.toolTipText = toolTip.trimIndent()
-    return row(label, separated, init)
+fun JTextField.addTextChangeListener(listener: (DocumentEvent) -> Unit) {
+    document.addDocumentListener(
+        object : DocumentAdapter() {
+            override fun textChanged(e: DocumentEvent) {
+                listener(e)
+            }
+        }
+    )
 }
 
 fun selectElement(element: RsElement, editor: Editor) {
@@ -127,4 +111,9 @@ fun selectElement(element: RsElement, editor: Editor) {
     editor.caretModel.moveToOffset(start)
     editor.scrollingModel.scrollToCaret(ScrollType.RELATIVE)
     editor.selectionModel.setSelection(start, element.textRange.endOffset)
+}
+
+fun <T : JComponent> Row.fullWidthCell(component: T): Cell<T> {
+    return cell(component)
+        .horizontalAlign(HorizontalAlign.FILL)
 }

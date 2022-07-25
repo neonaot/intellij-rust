@@ -14,7 +14,6 @@ import com.intellij.execution.runners.ProgramRunner
 import com.intellij.execution.testframework.autotest.ToggleAutoTestAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.util.SystemInfo
-import com.intellij.util.text.SemVer
 import org.rust.RsBundle
 import org.rust.cargo.runconfig.buildtool.CargoPatch
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
@@ -22,6 +21,7 @@ import org.rust.cargo.runconfig.console.CargoTestConsoleBuilder
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.toolchain.RustChannel
 import org.rust.cargo.toolchain.impl.RustcVersion
+import org.rust.cargo.util.parseSemVer
 import org.rust.ide.notifications.showBalloon
 import java.time.LocalDate
 
@@ -30,7 +30,6 @@ class CargoTestRunState(
     runConfiguration: CargoCommandConfiguration,
     config: CargoCommandConfiguration.CleanConfiguration.Ok
 ) : CargoRunStateBase(environment, runConfiguration, config) {
-
     private val cargoTestPatch: CargoPatch = { commandLine ->
         val rustcVer = cargoProject?.rustcInfo?.version
         // TODO: always pass `withSudo` when `com.intellij.execution.process.ElevationService` supports error stream redirection
@@ -41,9 +40,9 @@ class CargoTestRunState(
             } else {
                 RsBundle.message("notification.run.tests.as.root.unix")
             }
-            environment.project.showBalloon(message, NotificationType.WARNING)
+            project.showBalloon(message, NotificationType.WARNING)
         }
-        commandLine.copy(additionalArguments = patchArgs(commandLine, rustcVer), withSudo = false)
+        commandLine.copy(additionalArguments = patchArgs(commandLine, rustcVer), emulateTerminal = false, withSudo = false)
     }
 
     init {
@@ -89,7 +88,7 @@ class CargoTestRunState(
         private fun checkShowOutputSupport(ver: RustcVersion?): Boolean {
             if (ver == null) return false
             // --show-output is supported since 1.39.0-nightly/dev with a build date later than 2019-08-27
-            val minRelease = SemVer.parseFromText("1.39.0")
+            val minRelease = "1.39.0".parseSemVer()
             val commitDate = LocalDate.of(2019, 8, 27)
             return when {
                 ver.semver > minRelease -> true

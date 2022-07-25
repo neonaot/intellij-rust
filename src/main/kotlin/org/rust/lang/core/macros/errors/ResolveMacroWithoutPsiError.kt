@@ -9,10 +9,11 @@ import org.rust.lang.core.psi.RsProcMacroKind
 
 sealed class ResolveMacroWithoutPsiError {
     object Unresolved : ResolveMacroWithoutPsiError()
-    object Macro2IsNotSupported : ResolveMacroWithoutPsiError()
     object NoProcMacroArtifact : ResolveMacroWithoutPsiError()
     data class UnmatchedProcMacroKind(
         val callKind: RsProcMacroKind,
         val defKind: RsProcMacroKind,
     ) : ResolveMacroWithoutPsiError()
+    /** @see org.rust.lang.core.psi.RS_HARDCODED_PROC_MACRO_ATTRIBUTES */
+    object HardcodedProcMacroAttribute : ResolveMacroWithoutPsiError()
 }

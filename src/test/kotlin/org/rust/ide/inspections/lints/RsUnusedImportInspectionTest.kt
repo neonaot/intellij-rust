@@ -5,13 +5,12 @@
 
 package org.rust.ide.inspections.lints
 
+import org.junit.ComparisonFailure
 import org.rust.*
-import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.inspections.RsInspectionsTestBase
 import org.rust.lang.core.macros.MacroExpansionScope
 
-@UseNewResolve
 class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspection::class) {
     fun `test unused import`() = checkByText("""
         mod foo {
@@ -106,13 +105,13 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    fun `test ignore reexport`() = checkByText("""
+    fun `test ignore public reexport`() = checkByText("""
         pub mod foo {
             pub struct S {}
         }
 
         pub use foo::S;
-        pub(crate) use foo::S;
+        <warning descr="Unused import: `foo::S`">pub(crate) use foo::S;</warning>
     """)
 
     fun `test shadowed path`() = checkByText("""
@@ -180,7 +179,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @MockAdditionalCfgOptions("intellij_rust")
     fun `test cfg-disabled import and usage`() = checkByText("""
         mod foo {
@@ -284,6 +282,19 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
+    fun `test unused import with alias 2`() = checkByText("""
+        mod foo {
+            pub struct S;
+            pub struct T;
+        }
+        mod bar {
+            <warning descr="Unused import: `super::foo::S as T`">use super::foo::S as T;</warning>
+            mod inner {
+                fn bar(_: crate::foo::T) {}
+            }
+        }
+    """)
+
     fun `test used import with alias`() = checkByText("""
         mod foo {
             pub struct S;
@@ -342,7 +353,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test star import reexport`() = checkByText("""
         mod foo {
             mod bar {
@@ -358,7 +368,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test star import star reexport`() = checkByText("""
         mod foo {
             mod bar {
@@ -388,7 +397,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test private import used in same module`() = checkByText("""
        mod foo {
             mod bar {
@@ -446,7 +454,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
     """)
 
     @MinRustcVersion("1.46.0")
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ExpandMacros(MacroExpansionScope.WORKSPACE)
     @WithExperimentalFeatures(RsExperiments.EVALUATE_BUILD_SCRIPTS, RsExperiments.PROC_MACROS)
     @ProjectDescriptor(WithProcMacroRustProjectDescriptor::class)
@@ -457,6 +464,20 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
             use crate::Bar;
             #[derive(DeriveImplForFoo)]
             struct Foo;
+        }
+    """)
+
+    @MinRustcVersion("1.46.0")
+    @ExpandMacros(MacroExpansionScope.WORKSPACE)
+    @WithExperimentalFeatures(RsExperiments.EVALUATE_BUILD_SCRIPTS, RsExperiments.PROC_MACROS)
+    @ProjectDescriptor(WithProcMacroRustProjectDescriptor::class)
+    fun `test usage inside attribute proc macro expansion`() = checkByText("""
+        struct Foo;
+        mod foo {
+            use test_proc_macros::attr_replace_with_attr;
+            use crate::Foo;
+            #[attr_replace_with_attr(fn bar(_: Foo) {})]
+            fn func() {}
         }
     """)
 
@@ -532,8 +553,7 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
     """)
 
     // TODO: https://github.com/intellij-rust/intellij-rust/issues/7314 needs to be fixed
-    /*@MockEdition(CargoWorkspace.Edition.EDITION_2018)
-    @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
+    /*@ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test colon colon import`() = checkByText("""
         mod foo {
             use ::{std::collections};
@@ -543,7 +563,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)*/
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test use imported item in use speck with alias`() = checkByText("""
         mod bar {
             pub fn foo1() {}
@@ -622,7 +641,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test used qualified macro`() = checkByText("""
         mod foo {
             #[macro_export]
@@ -692,22 +710,224 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)*/
 
-    /*@MockEdition(CargoWorkspace.Edition.EDITION_2018)
-    fun `test private import used in child module`() = checkByText("""
-       mod foo {
-            mod bar {
-                pub struct S;
-            }
-            use bar::S;
+    fun `test private import unused in child module`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        <warning descr="Unused import: `foo::S`">use foo::S;</warning>
 
-            mod baz {
-                use super::S;
-                fn fun(_: S) {}
+        mod bar {}
+    """)
+
+    fun `test private import used in child module (direct reference)`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            fn fun(_: super::S) {}
+        }
+    """)
+
+    fun `test private import used in child module (named import)`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            use super::S;
+            fn fun(_: S) {}
+        }
+    """)
+
+    fun `test private import used in child module (glob import)`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            use super::*;
+            fn fun(_: S) {}
+        }
+    """)
+
+    fun `test private import used in child module (transitive glob import)`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar1 {
+            pub use crate::*;
+        }
+        mod bar2 {
+            use crate::bar1::*;
+            fn fun(_: S) {}
+        }
+    """)
+
+    fun `test private import used in child module (private transitive glob import)`() = checkByText("""
+        mod foo {
+            pub struct S;
+        }
+        <warning descr="Unused import: `foo::S`">use foo::S;</warning>
+
+        mod bar1 {
+            <warning descr="Unused import: `crate::*`">use crate::*;</warning>
+        }
+        mod bar2 {
+            <warning descr="Unused import: `crate::bar1::*`">use crate::bar1::*;</warning>
+            use crate::foo::S;
+            fn fun(_: S) {}
+        }
+    """)
+
+    fun `test pub(crate) import used in super module`() = checkByText("""
+        mod inner1 {
+            pub fn func() {}
+        }
+        pub mod inner2 {
+            pub(crate) use super::inner1::func;
+        }
+
+        fn main() {
+            inner2::func();
+        }
+    """)
+
+    fun `test pub(crate) import with alias used in super module`() = checkByText("""
+        mod inner1 {
+            pub fn func() {}
+        }
+        pub mod inner2 {
+            pub(crate) use super::inner1::func as func2;
+        }
+
+        fn main() {
+            inner2::func2();
+        }
+    """)
+
+    fun `test private import used in child module (match pattern)`() = checkByText("""
+        mod foo {
+            pub const S: i32 = 0;
+        }
+        use foo::S;
+
+        mod bar {
+            use super::*;
+            fn fun() {
+                match 0 {
+                    S => {}
+                    _ => {}
+                }
             }
         }
-    """)*/
+    """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
+    fun `test private import used in child module in macro 1`() = checkByText("""
+        macro_rules! as_is { ($($ t:tt)*) => {$($ t)*}; }
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            as_is! {
+                fn fun(_: super::S) {}
+            }
+        }
+    """)
+
+    fun `test private import used in child module in macro 2`() = checkByText("""
+        macro_rules! as_is { ($($ t:tt)*) => {$($ t)*}; }
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            as_is! {
+                use super::S;
+            }
+            fn fun(_: S) {}
+        }
+    """)
+
+    // TODO: Support text search inside macro expansions
+    fun `test private import used in child module in macro 3`() = expect<ComparisonFailure> {
+    checkByText("""
+        mod inner {
+            pub fn bar() {}
+        }
+        use inner::bar;
+
+        mod usage {
+            macro_rules! foo {
+                () => {
+                    fn foo() { super::bar(); }
+                }
+            }
+            foo!();
+        }
+    """)
+    }
+
+    fun `test private import used in child module in nested macro 1`() = checkByText("""
+        macro_rules! as_is { ($($ t:tt)*) => {$($ t)*}; }
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            as_is! {
+                as_is! {
+                    fn fun(_: super::S) {}
+                }
+            }
+        }
+    """)
+
+    fun `test private import used in child module in nested macro 2`() = checkByText("""
+        macro_rules! as_is { ($($ t:tt)*) => {$($ t)*}; }
+        mod foo {
+            pub struct S;
+        }
+        use foo::S;
+
+        mod bar {
+            as_is! {
+                as_is! {
+                    use super::S;
+                }
+            }
+            fn fun(_: S) {}
+        }
+    """)
+
+    fun `test private import used in expanded child module`() = checkByText("""
+        macro_rules! gen_foo {
+            ($($ t:tt)*) => {
+                mod foo {
+                    use super::*;
+                    $($ t)*
+                }
+            };
+        }
+
+        mod inner {
+            pub struct S;
+        }
+        use inner::S;
+        gen_foo! {
+            fn usage(_: S) {}
+        }
+    """)
+
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test writeln macro`() = checkByText("""
         use std::io::Write;
@@ -717,7 +937,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test println macro`() = checkByText("""
         use std::collections::HashSet;
@@ -726,7 +945,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test format macro`() = checkByText("""
         use std::collections::HashSet;
@@ -735,7 +953,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
     fun `test format macro with trait method call`() = checkByText("""
         struct S;
@@ -752,7 +969,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @MockAdditionalCfgOptions("intellij_rust")
     fun `test cfg-disabled function`() = checkByText("""
         mod inner {
@@ -768,7 +984,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @MockAdditionalCfgOptions("intellij_rust")
     fun `test cfg-disabled method`() = checkByText("""
         mod inner {
@@ -787,7 +1002,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test disabled in doctests`() = checkByText("""
         /// ```
         /// use test_project::func;
@@ -796,7 +1010,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
     """)
 
     // emulates situation when method is unresolved because of some bug
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test ignore trait import when there is unresolved related method 1`() = checkByText("""
         mod foo {
             pub trait T {
@@ -811,7 +1024,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test ignore trait import when there is unresolved related method 2`() = checkByText("""
         mod foo {
             pub trait T {
@@ -826,7 +1038,6 @@ class RsUnusedImportInspectionTest : RsInspectionsTestBase(RsUnusedImportInspect
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test ignore import when there is unresolved related path`() = checkByText("""
         mod foo {
             pub mod inner {}

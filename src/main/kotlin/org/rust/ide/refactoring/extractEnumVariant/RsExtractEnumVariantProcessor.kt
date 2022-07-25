@@ -17,6 +17,7 @@ import com.intellij.usageView.BaseUsageViewDescriptor
 import com.intellij.usageView.UsageInfo
 import com.intellij.usageView.UsageViewDescriptor
 import org.rust.ide.refactoring.RsInPlaceVariableIntroducer
+import org.rust.ide.refactoring.findTransitiveAttributes
 import org.rust.ide.utils.GenericConstraints
 import org.rust.ide.utils.import.RsImportHelper
 import org.rust.lang.core.psi.*
@@ -63,7 +64,7 @@ class RsExtractEnumVariantProcessor(
 
         for (occurrence in occurrences) {
             if (occurrence.reference?.resolve() == null) {
-                RsImportHelper.importElements(occurrence, setOf(inserted))
+                RsImportHelper.importElement(occurrence, inserted)
             }
         }
         val tupleField = RsPsiFactory.TupleField(
@@ -248,6 +249,3 @@ private fun createElement(variant: RsEnumVariant, factory: RsPsiFactory): Varian
         else -> error("unreachable")
     }
 }
-
-private fun findTransitiveAttributes(enum: RsEnumItem, supportedAttributes: Set<String>): List<RsOuterAttr> =
-    enum.outerAttrList.filter { it.metaItem.name in supportedAttributes }

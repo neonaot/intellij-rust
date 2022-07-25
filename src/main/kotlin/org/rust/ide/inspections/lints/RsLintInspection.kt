@@ -6,6 +6,7 @@
 package org.rust.ide.inspections.lints
 
 import com.intellij.codeInspection.*
+import com.intellij.codeInspection.util.InspectionMessage
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiComment
@@ -14,7 +15,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiNamedElement
 import org.rust.ide.inspections.RsLocalInspectionTool
 import org.rust.ide.inspections.RsProblemsHolder
-import org.rust.ide.inspections.lints.RsLintLevel.ALLOW
+import org.rust.ide.inspections.lints.RsLintLevel.*
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 
@@ -26,23 +27,36 @@ abstract class RsLintInspection : RsLocalInspectionTool() {
 
     protected fun RsProblemsHolder.registerLintProblem(
         element: PsiElement,
-        descriptionTemplate: String,
-        vararg fixes: LocalQuickFix
+        @InspectionMessage descriptionTemplate: String,
+        lintHighlightingType: RsLintHighlightingType = RsLintHighlightingType.DEFAULT,
+        fixes: List<LocalQuickFix> = emptyList()
     ) {
-        registerProblem(element, descriptionTemplate, getProblemHighlightType(element), *fixes)
+        registerProblem(element, descriptionTemplate, getProblemHighlightType(element, lintHighlightingType), *fixes.toTypedArray())
     }
 
     protected fun RsProblemsHolder.registerLintProblem(
         element: PsiElement,
-        descriptionTemplate: String,
+        @InspectionMessage descriptionTemplate: String,
         rangeInElement: TextRange,
-        vararg fixes: LocalQuickFix
+        lintHighlightingType: RsLintHighlightingType = RsLintHighlightingType.DEFAULT,
+        fixes: List<LocalQuickFix> = emptyList()
     ) {
-        registerProblem(element, descriptionTemplate, getProblemHighlightType(element), rangeInElement, *fixes)
+        val highlightType = getProblemHighlightType(element, lintHighlightingType)
+        registerProblem(element, descriptionTemplate, highlightType, rangeInElement, *fixes.toTypedArray())
     }
 
-    private fun getProblemHighlightType(element: PsiElement): ProblemHighlightType =
-        getLint(element)?.getProblemHighlightType(element) ?: ProblemHighlightType.WARNING
+    private fun getProblemHighlightType(
+        element: PsiElement,
+        lintHighlightingType: RsLintHighlightingType
+    ): ProblemHighlightType {
+        val lint = getLint(element) ?: return ProblemHighlightType.WARNING
+        return when (lint.levelFor(element)) {
+            ALLOW -> lintHighlightingType.allow
+            WARN -> lintHighlightingType.warn
+            DENY -> lintHighlightingType.deny
+            FORBID -> lintHighlightingType.forbid
+        }
+    }
 
     override fun isSuppressedFor(element: PsiElement): Boolean {
         if (super.isSuppressedFor(element)) return true

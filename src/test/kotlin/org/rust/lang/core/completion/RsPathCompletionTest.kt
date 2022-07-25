@@ -10,7 +10,6 @@ import com.intellij.util.Urls
 import org.rust.ProjectDescriptor
 import org.rust.RustProjectDescriptorBase
 import org.rust.WithRustup
-import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.project.workspace.CargoWorkspaceData
 import java.nio.file.Paths
@@ -62,27 +61,23 @@ class RsPathCompletionTest : RsCompletionTestBase() {
 
     // enable once name resolution of <Foo as Trait>::function is fixed
     @ProjectDescriptor(WithWorkspaceAndStdLibProjectDescriptor::class)
-    fun `test do not complete paths in path trait impl`() {
-        expect<IllegalStateException> {
-            checkNoCompletionByFileTree("""
-        //- crate-a/main.rs
-            use std::path::Path;
-            trait Foo {
-                fn new(x: &str) -> i32;
-            }
-            impl Foo for Path {
-                fn new(x: &str) -> i32 {
-                    123
-                }
-            }
-            fn main() {
-                <Path as Foo>::new("fo/*caret*/");
-            }
-        //- foo.rs
-            pub struct Foo;
-        """)
+    fun `test do not complete paths in path trait impl`() = checkNoCompletionByFileTree("""
+    //- crate-a/main.rs
+        use std::path::Path;
+        trait Foo {
+            fn new(x: &str) -> i32;
         }
-    }
+        impl Foo for Path {
+            fn new(x: &str) -> i32 {
+                123
+            }
+        }
+        fn main() {
+            <Path as Foo>::new("fo/*caret*/");
+        }
+    //- foo.rs
+        pub struct Foo;
+    """)
 
     @ProjectDescriptor(WithWorkspaceAndStdLibProjectDescriptor::class)
     fun `test complete paths in pathbuf constructor`() = doSingleCompletionByFileTree("""
@@ -288,7 +283,8 @@ private object WithWorkspaceProjectDescriptor : RustProjectDescriptorBase() {
         )
         return CargoWorkspace.deserialize(
             Paths.get("${Urls.newFromIdea(contentRoot).path}/workspace/Cargo.toml"),
-            CargoWorkspaceData(packages, emptyMap(), emptyMap(), contentRoot), CfgOptions.DEFAULT)
+            CargoWorkspaceData(packages, emptyMap(), emptyMap(), contentRoot),
+        )
     }
 }
 

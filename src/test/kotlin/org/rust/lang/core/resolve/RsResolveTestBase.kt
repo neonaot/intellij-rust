@@ -7,7 +7,6 @@ package org.rust.lang.core.resolve
 
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileFilter
-import com.intellij.openapiext.TestmarkPred
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
 import org.intellij.lang.annotations.Language
@@ -59,15 +58,6 @@ abstract class RsResolveTestBase : RsTestBase() {
             "$refElement `${refElement.text}` should resolve to $target (${target.text}), was $resolved (${resolved.text}) instead"
         }
     }
-
-    protected fun checkByCode(@Language("Rust") code: String, mark: TestmarkPred) =
-        mark.checkHit { checkByCode(code) }
-
-    protected fun stubOnlyResolve(
-        @Language("Rust") code: String,
-        mark: TestmarkPred,
-        resolveFileProducer: (PsiElement) -> VirtualFile = this::getActualResolveFile
-    ) = mark.checkHit { stubOnlyResolve(code, resolveFileProducer) }
 
     protected fun stubOnlyResolve(
         @Language("Rust") code: String,

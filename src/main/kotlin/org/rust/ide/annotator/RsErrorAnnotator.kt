@@ -6,31 +6,32 @@
 package org.rust.ide.annotator
 
 import com.intellij.codeInsight.daemon.impl.HighlightRangeExtension
-import com.intellij.codeInspection.LocalQuickFix
 import com.intellij.codeInspection.ProblemHighlightType
-import com.intellij.ide.annotator.AnnotatorBase
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.AnnotationSession
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.parentOfType
-import com.intellij.util.containers.addIfNotNull
+import com.intellij.util.ProcessingContext
+import com.intellij.util.SmartList
+import com.intellij.util.ThreeState
 import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.ide.annotator.fixes.*
 import org.rust.ide.presentation.getStubOnlyText
+import org.rust.ide.presentation.shortPresentableText
 import org.rust.ide.refactoring.RsNamesValidator.Companion.RESERVED_LIFETIME_NAMES
 import org.rust.ide.refactoring.findBinding
 import org.rust.lang.core.*
 import org.rust.lang.core.FeatureAvailability.*
 import org.rust.lang.core.macros.MacroExpansionMode
 import org.rust.lang.core.macros.macroExpansionManager
+import org.rust.lang.core.macros.proc.ProcMacroApplicationService
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.RsElementTypes.IDENTIFIER
 import org.rust.lang.core.psi.ext.*
@@ -43,9 +44,12 @@ import org.rust.lang.core.types.infer.substitute
 import org.rust.lang.core.types.ty.*
 import org.rust.lang.utils.RsDiagnostic
 import org.rust.lang.utils.RsDiagnostic.IncorrectFunctionArgumentCountError.FunctionType
-import org.rust.lang.utils.RsErrorCode
+import org.rust.lang.utils.RsErrorCode.*
+import org.rust.lang.utils.SUPPORTED_CALLING_CONVENTIONS
 import org.rust.lang.utils.addToHolder
+import org.rust.lang.utils.areUnstableFeaturesAvailable
 import org.rust.lang.utils.evaluation.evaluate
+import org.rust.openapiext.isUnitTestMode
 
 class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     override fun isForceHighlightParents(file: PsiFile): Boolean = file is RsFile
@@ -62,10 +66,16 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
             override fun visitStructItem(o: RsStructItem) = checkDuplicates(rsHolder, o)
             override fun visitEnumItem(o: RsEnumItem) = checkEnumItem(rsHolder, o)
             override fun visitEnumVariant(o: RsEnumVariant) = checkEnumVariant(rsHolder, o)
+            override fun visitExternAbi(o: RsExternAbi) = checkExternAbi(rsHolder, o)
             override fun visitFunction(o: RsFunction) = checkFunction(rsHolder, o)
             override fun visitImplItem(o: RsImplItem) = checkImpl(rsHolder, o)
+            override fun visitLetDecl(o: RsLetDecl) = checkLetDecl(rsHolder, o)
+            override fun visitLetElseBranch(o: RsLetElseBranch) = checkLetElseBranch(rsHolder, o)
             override fun visitLabel(o: RsLabel) = checkLabel(rsHolder, o)
+            override fun visitLabelDecl(o: RsLabelDecl) = checkLabelDecl(rsHolder, o)
             override fun visitLifetime(o: RsLifetime) = checkLifetime(rsHolder, o)
+            override fun visitMacro2(o: RsMacro2) = checkMacro2(rsHolder, o)
+            override fun visitMatchArmGuard(o: RsMatchArmGuard) = checkMatchArmGuard(rsHolder, o)
             override fun visitModDeclItem(o: RsModDeclItem) = checkModDecl(rsHolder, o)
             override fun visitModItem(o: RsModItem) = checkDuplicates(rsHolder, o)
             override fun visitUseSpeck(o: RsUseSpeck) = checkUseSpeck(rsHolder, o)
@@ -93,6 +103,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
             override fun visitArrayExpr(o: RsArrayExpr) = checkArrayExpr(rsHolder, o)
             override fun visitVariantDiscriminant(o: RsVariantDiscriminant) = collectDiagnostics(rsHolder, o)
             override fun visitPolybound(o: RsPolybound) = checkPolybound(rsHolder, o)
+            override fun visitTildeConst(o: RsTildeConst) = checkTildeConst(rsHolder, o)
             override fun visitTraitRef(o: RsTraitRef) = checkTraitRef(rsHolder, o)
             override fun visitCallExpr(o: RsCallExpr) = checkCallExpr(rsHolder, o)
             override fun visitBlockExpr(o: RsBlockExpr) = checkBlockExpr(rsHolder, o)
@@ -114,13 +125,44 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         element.accept(visitor)
     }
 
+    private fun checkMacro2(holder: RsAnnotationHolder, macro: RsMacro2) {
+        DECL_MACRO.check(holder, macro.macroKw, "`macro`")
+    }
+
     private fun checkMetaItem(holder: RsAnnotationHolder, metaItem: RsMetaItem) {
         val args = metaItem.metaItemArgs
         val name = metaItem.name
-        if (metaItem.isRootMetaItem() && args != null && name in listOf("cfg", "cfg_attr")) {
-            val item = args.metaItemList.getOrNull(0) ?: return
-            checkCfgPredicate(holder, item)
+        val context = ProcessingContext()
+        if (metaItem.isRootMetaItem(context) && args != null) {
+            if (name in listOf("cfg", "cfg_attr")) {
+                val item = args.metaItemList.getOrNull(0) ?: return
+                checkCfgPredicate(holder, item)
+            }
+            if (name == "feature") {
+                checkFeatureAttribute(holder, metaItem, context)
+            }
         }
+
+    }
+
+    private fun checkFeatureAttribute(holder: RsAnnotationHolder, item: RsMetaItem, context: ProcessingContext) {
+        // outer feature attributes are ignored by the compiler
+        val attr = context.get(RsPsiPattern.META_ITEM_ATTR)
+        if (attr !is RsInnerAttr) return
+        val path = item.path ?: return
+        // feature attributes in non-crate root modules are ignored by the compiler
+        if (!item.containingMod.isCrateRoot) return
+        val metaItemList = item.metaItemArgs?.metaItemList.orEmpty()
+        // #![feature()] can be written even in stable channel
+        if (metaItemList.isEmpty()) return
+        val version = item.cargoProject?.rustcInfo?.version ?: return
+        // we should annotate `feature` attribute if only we are sure that unstable features are not available
+        if (item.areUnstableFeaturesAvailable(version) != ThreeState.NO) return
+
+        val channelName = version.channel.channel ?: return
+
+        val fix = if (item.parent == attr) RemoveAttrFix(attr) else null
+        RsDiagnostic.FeatureAttributeInNonNightlyChannel(path, channelName, fix).addToHolder(holder)
     }
 
     private fun checkCfgPredicate(holder: RsAnnotationHolder, item: RsMetaItem) {
@@ -183,10 +225,31 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkDuplicateImport(holder: RsAnnotationHolder, useSpeck: RsUseSpeck) {
-        val duplicates = holder.currentAnnotationSession.duplicatesByNamespace(useSpeck.containingMod, false)
-        if (useSpeck.namespaces.any { useSpeck in duplicates[it].orEmpty() }) {
-            val identifier = PsiTreeUtil.getDeepestLast(useSpeck)
-            RsDiagnostic.DuplicateImportError(identifier).addToHolder(holder)
+        if (checkDuplicateSelfInUseGroup(holder, useSpeck)) return
+
+        val scope = useSpeck.parentOfType<RsUseItem>()!!.parent
+        val duplicatesMap = holder.currentAnnotationSession.duplicatesByNamespace(scope, false)
+        val (namespace, name, duplicates) = duplicatesMap[useSpeck] ?: return
+        val identifier = PsiTreeUtil.getDeepestLast(useSpeck)
+        val otherDuplicates = duplicates.filter { it != useSpeck }
+        val errorCode = when {
+            otherDuplicates.any { it is RsUseSpeck } -> E0252
+            otherDuplicates.any { it is RsExternCrateItem } -> E0254
+            else -> E0255
+        }
+        RsDiagnostic.DuplicateDefinitionError(identifier, namespace, name, scope, errorCode).addToHolder(holder)
+    }
+
+    private fun checkDuplicateSelfInUseGroup(holder: RsAnnotationHolder, useSpeck: RsUseSpeck): Boolean {
+        fun RsUseSpeck.isSelfImport(): Boolean = path?.referenceName == "self" && text == "self"
+        if (!useSpeck.isSelfImport()) return false
+        val useGroup = useSpeck.parent as? RsUseGroup ?: return false
+        val selfImports = useGroup.useSpeckList.filter { it.isSelfImport() }
+        return if (selfImports.size >= 2 && useSpeck in selfImports) {
+            RsDiagnostic.DuplicateSelfInUseGroup(useSpeck).addToHolder(holder)
+            true
+        } else {
+            false
         }
     }
 
@@ -323,7 +386,8 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         val declaration = patTupleStruct.path.reference?.deepResolve() as? RsFieldsOwner ?: return
 
         val declarationFieldsAmount = declaration.fields.size
-        val bodyFieldsAmount = patTupleStruct.patList.size
+        // Rest is non-binding, meaning it is accepted even if all fields are already bound
+        val bodyFieldsAmount = patTupleStruct.patList.filterNot { it is RsPatRest }.size
         if (bodyFieldsAmount < declarationFieldsAmount && patTupleStruct.patRest == null) {
             RsDiagnostic.MissingFieldsInTuplePattern(
                 patTupleStruct,
@@ -431,12 +495,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkCallExpr(holder: RsAnnotationHolder, o: RsCallExpr) {
-        val path = (o.expr as? RsPathExpr)?.path ?: return
         checkNotCallingDrop(o, holder)
-        val owner = path.reference?.deepResolve() as? RsFieldsOwner ?: return
-        if (owner.tupleFields == null && !owner.implLookup.isAnyFn(owner.asTy())) {
-            RsDiagnostic.ExpectedFunction(o).addToHolder(holder)
-        }
     }
 
     private fun checkTraitRef(holder: RsAnnotationHolder, o: RsTraitRef) {
@@ -482,10 +541,17 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkReferenceIsPublic(ref: RsReferenceElement, o: RsElement, holder: RsAnnotationHolder) {
+        // Do not annotate usages of private items in debugger
+        if (o.containingFile is RsDebuggerExpressionCodeFragment) {
+            return
+        }
         val reference = ref.reference ?: return
         val highlightedElement = ref.referenceNameElement ?: return
         val referenceName = ref.referenceName ?: return
-        val resolvedElement = reference.resolve() as? RsVisible ?: return
+        val resolvedElement = when (ref) {
+            is RsStructLiteralField -> reference.multiResolve().firstOrNull { it is RsVisible }
+            else -> reference.resolve()
+        } as? RsVisible ?: return
         val oMod = o.contextStrict<RsMod>() ?: return
         if (resolvedElement.isVisibleFrom(oMod)) return
         val withinOneCrate = resolvedElement.crateRoot == o.crateRoot
@@ -504,7 +570,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                 )
             }
             ref is RsMethodCall -> RsDiagnostic.AccessError(
-                highlightedElement, RsErrorCode.E0624, "Method",
+                highlightedElement, E0624, "Method",
                 MakePublicFix.createIfCompatible(element, referenceName, withinOneCrate)
             )
             else -> {
@@ -514,7 +580,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                 }
 
                 RsDiagnostic.AccessError(
-                    highlightedElement, RsErrorCode.E0603, itemType,
+                    highlightedElement, E0603, itemType,
                     MakePublicFix.createIfCompatible(element, referenceName, withinOneCrate)
                 )
             }
@@ -572,6 +638,8 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkPath(holder: RsAnnotationHolder, path: RsPath) {
+        if (!checkSelfImport(holder, path)) return
+
         val qualifier = path.path
         if ((qualifier == null || isValidSelfSuperPrefix(qualifier)) && !isValidSelfSuperPrefix(path)) {
             val element = path.referenceNameElement ?: return
@@ -612,12 +680,43 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         checkUnstableAttribute(path, holder)
     }
 
+    private fun checkSelfImport(holder: RsAnnotationHolder, path: RsPath): Boolean {
+        if (!path.isSelfImport()) return true
+
+        val element = path.referenceNameElement ?: return true
+        when (val parent2 = path.parent.parent) {
+            is RsUseItem -> {
+                RsDiagnostic.SelfImportNotInUseGroup(element).addToHolder(holder)
+                return false
+            }
+            is RsUseGroup -> {
+                val parent3 = parent2.parent
+                val parent4 = parent3.parent
+                if (parent4 is RsUseItem && parent3 is RsUseSpeck && parent3.path == null && path.path == null) {
+                    RsDiagnostic.SelfImportInUseGroupWithEmptyPrefix(element).addToHolder(holder)
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private fun RsPath.isSelfImport(): Boolean {
+        val parent = parent
+        return self != null && parent is RsUseSpeck && parent.useGroup == null
+    }
+
     private fun checkConstParameter(holder: RsAnnotationHolder, constParameter: RsConstParameter) {
+        collectDiagnostics(holder, constParameter)
         checkConstGenerics(holder, constParameter)
         checkDuplicates(holder, constParameter)
     }
 
     private fun checkLifetimeParameter(holder: RsAnnotationHolder, lifetimeParameter: RsLifetimeParameter) {
+        if (lifetimeParameter.name.isIllegalLifetimeName(lifetimeParameter.edition)) {
+            RsDiagnostic.IllegalLifetimeName(lifetimeParameter).addToHolder(holder)
+        }
+
         checkReservedLifetimeName(holder, lifetimeParameter)
         checkDuplicates(holder, lifetimeParameter)
     }
@@ -634,6 +733,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         if (parent is RsImplItem ||
             parent is RsForeignModItem ||
             parent is RsEnumVariant ||
+            isInTrait(vis) ||
             isInTraitImpl(vis) ||
             isInEnumVariantField(vis)
         ) {
@@ -653,14 +753,48 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         if (visRestriction.`in` == null && (path.path != null || path.kind == PathKind.IDENTIFIER)) {
             RsDiagnostic.IncorrectVisibilityRestriction(visRestriction).addToHolder(holder)
         }
+        if (visRestriction.`in` != null) run {
+            val restrictedMod = path.reference?.resolve() ?: return@run
+            val itemMod = visRestriction.containingMod
+            if (restrictedMod !in itemMod.superMods) {
+                RsDiagnostic.VisibilityRestrictionMustBeAncestorModule(path).addToHolder(holder)
+            }
+        }
+    }
+
+    private fun checkLetDecl(holder: RsAnnotationHolder, letDecl: RsLetDecl) {
+        val pat = letDecl.pat
+        if (letDecl.letElseBranch != null && pat != null && pat.isIrrefutable) {
+            IRREFUTABLE_LET_PATTERNS.check(holder, pat, "irrefutable let pattern")
+        }
+    }
+
+    private fun checkLetElseBranch(holder: RsAnnotationHolder, elseBranch: RsLetElseBranch) {
+        LET_ELSE.check(holder, elseBranch, "let else")
     }
 
     private fun checkLabel(holder: RsAnnotationHolder, label: RsLabel) {
-        if (!hasResolve(label)) return
-        RsDiagnostic.UndeclaredLabelError(label).addToHolder(holder)
+        if (hasResolve(label)) {
+            RsDiagnostic.UndeclaredLabelError(label).addToHolder(holder)
+        }
+        val labelName = label.referenceName
+        if (labelName.isInvalidLabelName(label.edition)) {
+            RsDiagnostic.InvalidLabelName(label, labelName).addToHolder(holder)
+        }
+    }
+
+    private fun checkLabelDecl(holder: RsAnnotationHolder, labelDecl: RsLabelDecl) {
+        val labelName = labelDecl.name
+        if (labelName?.isInvalidLabelName(labelDecl.edition) == true) {
+            RsDiagnostic.InvalidLabelName(labelDecl.quoteIdentifier, labelName).addToHolder(holder)
+        }
     }
 
     private fun checkLifetime(holder: RsAnnotationHolder, lifetime: RsLifetime) {
+        if (lifetime.name.isIllegalLifetimeName(lifetime.edition)) {
+            RsDiagnostic.IllegalLifetimeName(lifetime).addToHolder(holder)
+        }
+
         if (lifetime.isPredefined || !hasResolve(lifetime)) return
 
         val owner = lifetime.ancestorStrict<RsGenericDeclaration>() ?: return
@@ -684,6 +818,13 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                 RsDiagnostic.InBandAndExplicitLifetimesError(lifetime).addToHolder(holder)
             else ->
                 RsDiagnostic.UndeclaredLifetimeError(lifetime).addToHolder(holder)
+        }
+    }
+
+    private fun checkMatchArmGuard(holder: RsAnnotationHolder, guard: RsMatchArmGuard) {
+        val let = guard.let
+        if (let != null) {
+            IF_LET_GUARD.check(holder, let, "if let guard")
         }
     }
 
@@ -764,8 +905,10 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         val traitRef = impl.traitRef ?: return
         val typeRef = impl.typeReference ?: return
         val type = typeRef.type
+        // If type is not fully known, the plugin should produce some another error, like E0412
+        if (type.containsTyOfClass(TyUnknown::class.java)) return
         val supertraits = trait.typeParamBounds?.polyboundList?.mapNotNull { it.bound } ?: return
-        val lookup = typeRef.implLookup
+        val lookup = impl.implLookup
 
         val selfSubst = mapOf(TyTypeParameter.self() to type).toTypeSubst()
         val substitution = (impl.implementedTrait?.subst ?: emptySubstitution).substituteInValues(selfSubst) + selfSubst
@@ -895,6 +1038,31 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkTypeAlias(holder: RsAnnotationHolder, ta: RsTypeAlias) {
+        when (val owner = ta.owner) {
+            is RsAbstractableOwner.Trait -> {
+                ta.typeReference?.let { ASSOCIATED_TYPE_DEFAULTS.check(holder, it, "associated type defaults") }
+                val typeParameterList = ta.typeParameterList
+                if (typeParameterList != null && typeParameterList.getGenericParameters().isNotEmpty()) {
+                    GENERIC_ASSOCIATED_TYPES.check(holder, typeParameterList, "generic associated types")
+                }
+                ta.whereClause?.let { GENERIC_ASSOCIATED_TYPES.check(holder, it, "where clauses on associated types") }
+            }
+            is RsAbstractableOwner.Impl -> {
+                if (owner.isInherent) {
+                    INHERENT_ASSOCIATED_TYPES.check(holder, ta, "inherent associated types")
+                }
+                val typeParameterList = ta.typeParameterList
+                if (typeParameterList != null && typeParameterList.getGenericParameters().isNotEmpty()) {
+                    GENERIC_ASSOCIATED_TYPES.check(holder, typeParameterList, "generic associated types")
+                }
+                ta.whereClause?.let { GENERIC_ASSOCIATED_TYPES.check(holder, it, "where clauses on associated types") }
+            }
+            is RsAbstractableOwner.Foreign -> {
+                EXTERN_TYPES.check(holder, ta, "extern types")
+            }
+            else -> {}
+        }
+
         checkDuplicates(holder, ta)
     }
 
@@ -918,6 +1086,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
 
     private fun checkTypeArgumentList(holder: RsAnnotationHolder, args: RsTypeArgumentList) {
         checkRedundantColonColon(holder, args)
+        checkConstArguments(holder, args.exprList)
     }
 
     private fun checkValueParameterList(holder: RsAnnotationHolder, args: RsValueParameterList) {
@@ -944,13 +1113,15 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
     }
 
     private fun checkValueArgumentList(holder: RsAnnotationHolder, args: RsValueArgumentList) {
-        val (expectedCount, functionType, function) = when (val parent = args.parent) {
-            is RsCallExpr -> parent.getFunctionCallContext()
-            is RsMethodCall -> parent.getFunctionCallContext()
-            else -> null
-        } ?: return
+        val (expectedCount, functionType, function) = args.getFunctionCallContext() ?: return
 
         val realCount = args.exprList.size
+        val fixes = if (function != null) {
+            ChangeFunctionSignatureFix.createIfCompatible(args, function)
+        } else {
+            emptyList()
+        }
+
         if (realCount < expectedCount) {
             // Mark only the right parenthesis
             val rparen = args.rparen
@@ -961,7 +1132,7 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
             // But enable the quick fix on the whole argument range
             RsDiagnostic.IncorrectFunctionArgumentCountError(
                 args, expectedCount, realCount, functionType,
-                listOf(FillFunctionArgumentsFix(args)),
+                listOf(FillFunctionArgumentsFix(args)) + fixes,
                 textAttributes = TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES")
             ).addToHolder(holder)
         } else if (!functionType.variadic && realCount > expectedCount) {
@@ -969,24 +1140,22 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                 holder.newErrorAnnotation(it, null)?.create()
             }
 
-            val fixes = mutableListOf<LocalQuickFix>(RemoveRedundantFunctionArgumentsFix(args, expectedCount))
-            if (function != null) {
-                fixes.addIfNotNull(ChangeFunctionSignatureFix.createIfCompatible(
-                    args, function,
-                    ChangeFunctionSignatureFix.ArgumentScanDirection.Forward
-                ))
-                fixes.addIfNotNull(ChangeFunctionSignatureFix.createIfCompatible(
-                    args, function,
-                    ChangeFunctionSignatureFix.ArgumentScanDirection.Backward
-                ))
-            }
-
             RsDiagnostic.IncorrectFunctionArgumentCountError(
                 args, expectedCount, realCount, functionType,
-                fixes = fixes,
+                fixes = listOf(RemoveRedundantFunctionArgumentsFix(args, expectedCount)) + fixes,
                 textAttributes = TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES")
             )
-            .addToHolder(holder)
+                .addToHolder(holder)
+        }
+
+        if (realCount == expectedCount && fixes.isNotEmpty()) {
+            val builder = holder.holder.newSilentAnnotation(HighlightSeverity.ERROR)
+                .textAttributes(TextAttributesKey.createTextAttributesKey("DEFAULT_TEXT_ATTRIBUTES"))
+                .range(args.textRange)
+            for (fix in fixes) {
+                builder.withFix(fix)
+            }
+            builder.create()
         }
     }
 
@@ -1070,10 +1239,10 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
                     RsDiagnostic.InvalidStartAttrError.InvalidParam(params[0].typeReference ?: params[0], 0)
                         .addToHolder(holder)
                 }
-                if (params[1].typeReference?.type != TyPointer(
+                if (params[1].typeReference?.type?.isEquivalentTo(TyPointer(
                         TyPointer(TyInteger.U8.INSTANCE, Mutability.IMMUTABLE),
                         Mutability.IMMUTABLE
-                    )
+                    )) == false
                 ) {
                     RsDiagnostic.InvalidStartAttrError.InvalidParam(params[1].typeReference ?: params[1], 1)
                         .addToHolder(holder)
@@ -1152,16 +1321,34 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         RsDiagnostic.ReturnMustHaveValueError(ret).addToHolder(holder)
     }
 
-    private fun checkExternCrate(holder: RsAnnotationHolder, el: RsExternCrateItem) {
-        if (el.self != null) {
-            EXTERN_CRATE_SELF.check(holder, el, "`extern crate self`")
-            if (el.alias == null) {
-                // The current version of rustc (1.33.0) prints
-                // "`extern crate self;` requires renaming" error message
-                // but it looks like quite unclear
-                holder.createErrorAnnotation(el, "`extern crate self` requires `as name`")
-            }
+    private fun checkExternCrate(holder: RsAnnotationHolder, externCrate: RsExternCrateItem) {
+        if (checkExternCrateSelf(holder, externCrate)) return
+        checkDuplicateExternCrate(holder, externCrate)
+    }
+
+    private fun checkExternCrateSelf(holder: RsAnnotationHolder, externCrate: RsExternCrateItem): Boolean {
+        if (externCrate.self == null) return false
+        EXTERN_CRATE_SELF.check(holder, externCrate, "`extern crate self`")
+        if (externCrate.alias == null) {
+            // The current version of rustc (1.33.0) prints
+            // "`extern crate self;` requires renaming" error message
+            // but it looks like quite unclear
+            holder.createErrorAnnotation(externCrate, "`extern crate self` requires `as name`")
         }
+        return true
+    }
+
+    private fun checkDuplicateExternCrate(holder: RsAnnotationHolder, externCrate: RsExternCrateItem) {
+        val scope = externCrate.parent
+        val duplicatesMap = holder.currentAnnotationSession.duplicatesByNamespace(scope, false)
+        val (namespace, name, duplicates) = duplicatesMap[externCrate] ?: return
+        val otherDuplicates = duplicates.filter { it != externCrate }
+        val errorCode = when {
+            otherDuplicates.any { it is RsExternCrateItem } -> E0259
+            otherDuplicates.any { it is RsUseSpeck } -> E0254
+            else -> E0260
+        }
+        RsDiagnostic.DuplicateDefinitionError(externCrate, namespace, name, scope, errorCode).addToHolder(holder)
     }
 
     private fun checkPolybound(holder: RsAnnotationHolder, o: RsPolybound) {
@@ -1170,10 +1357,24 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         }
     }
 
+    private fun checkTildeConst(holder: RsAnnotationHolder, o: RsTildeConst) {
+        CONST_TRAIT_IMPL.check(holder, o, "const trait impls")
+        CONST_FN_TRAIT_BOUND.check(holder, o, "const fn trait bound")
+    }
+
     private fun checkBlockExpr(holder: RsAnnotationHolder, expr: RsBlockExpr) {
         val label = expr.labelDecl
         if (label != null) {
             LABEL_BREAK_VALUE.check(holder, label, "label on block")
+        }
+
+        val const = expr.const
+        if (const != null) {
+            if (expr.parent is RsPat) {
+                INLINE_CONST_PAT.check(holder, const, "inline const pat")
+            } else {
+                INLINE_CONST.check(holder, const, "inline const")
+            }
         }
     }
 
@@ -1264,10 +1465,22 @@ class RsErrorAnnotator : AnnotatorBase(), HighlightRangeExtension {
         }
     }
 
-    private fun isInTraitImpl(o: RsVis): Boolean {
-        val impl = o.parent?.parent?.parent
-        return impl is RsImplItem && impl.traitRef != null
+    private fun checkExternAbi(holder: RsAnnotationHolder, abi: RsExternAbi) {
+        val litExpr = abi.litExpr ?: return
+        val abiName = litExpr.stringValue ?: return
+        if (abiName !in SUPPORTED_CALLING_CONVENTIONS) {
+            RsDiagnostic.InvalidAbi(litExpr, abiName).addToHolder(holder)
+        } else {
+            val compilerFeature = SUPPORTED_CALLING_CONVENTIONS[abiName]
+            compilerFeature?.check(holder, litExpr, "$abiName ABI")
+        }
     }
+
+    private fun isInTrait(o: RsVis): Boolean =
+        (o.parent as? RsAbstractable)?.owner is RsAbstractableOwner.Trait
+
+    private fun isInTraitImpl(o: RsVis): Boolean =
+        (o.parent as? RsAbstractable)?.owner?.isTraitImpl == true
 
     private fun isInEnumVariantField(o: RsVis): Boolean {
         val field = o.parent as? RsNamedFieldDecl
@@ -1293,10 +1506,8 @@ private fun checkDuplicates(
 ) {
     if (element.isCfgUnknown) return
     val owner = if (scope is RsMembers) scope.parent else scope
-    val duplicates = holder.currentAnnotationSession.duplicatesByNamespace(scope, recursively)
-    val ns = element.namespacesForDuplicatesCheck.find { element in duplicates[it].orEmpty() }
-        ?: return
-    val name = element.name!!
+    val duplicatesMap = holder.currentAnnotationSession.duplicatesByNamespace(scope, recursively)
+    val (ns, name, duplicates) = duplicatesMap[element] ?: return
 
     val identifier = element.nameIdentifier ?: element
     val message = when {
@@ -1312,50 +1523,64 @@ private fun checkDuplicates(
             RsDiagnostic.DuplicateBindingError(identifier, name)
         }
         element is RsTypeParameter -> RsDiagnostic.DuplicateTypeParameterError(identifier, name)
-        owner is RsImplItem -> RsDiagnostic.DuplicateDefinitionError(identifier, name)
+        owner is RsImplItem -> RsDiagnostic.DuplicateAssociatedItemError(identifier, name)
         else -> {
-            val scopeType = when (owner) {
-                is RsBlock -> "block"
-                is RsMod, is RsForeignModItem -> "module"
-                is RsTraitItem -> "trait"
-                else -> "scope"
+            val otherDuplicates = duplicates.filter { it != element }
+            val errorCode = when {
+                otherDuplicates.all { it !is RsUseSpeck && it !is RsExternCrateItem } -> E0428
+                otherDuplicates.any { it is RsUseSpeck } -> E0255
+                else -> E0260
             }
-            RsDiagnostic.DuplicateItemError(identifier, ns.itemName, name, scopeType)
+            RsDiagnostic.DuplicateDefinitionError(identifier, ns, name, owner, errorCode)
         }
     }
     message.addToHolder(holder)
 }
 
 private fun checkConstGenerics(holder: RsAnnotationHolder, constParameter: RsConstParameter) {
-    val constGenericAvailability = CONST_GENERICS.availability(constParameter)
-    if (constGenericAvailability == AVAILABLE) return
+    MIN_CONST_GENERICS.check(holder, constParameter, "min const generics")
+    checkConstGenericsDefaults(holder, constParameter.expr)
+    checkConstArguments(holder, listOfNotNull(constParameter.expr))
 
-    val version = constParameter.cargoProject?.rustcInfo?.version
-    val feature = when (constParameter.typeReference?.type) {
-        is TyInteger, is TyBool, is TyChar -> {
-            val current = version?.semver
-            val since = MIN_CONST_GENERICS.since
-            if (current != null &&
-                since != null &&
-                current.isGreaterOrEqualThan(since.major, since.minor, since.patch)) {
-                MIN_CONST_GENERICS
-            } else {
-                CONST_GENERICS
-            }
+    val typeReference = constParameter.typeReference
+    val ty = typeReference?.type ?: return
+    if (ty !is TyInteger && ty !is TyBool && ty !is TyChar) {
+        ADT_CONST_PARAMS.check(holder, typeReference, "adt const params")
+    }
+
+    val lookup = ImplLookup.relativeTo(constParameter)
+    if (ProcMacroApplicationService.isEnabled() && !(lookup.isPartialEq(ty) && lookup.isEq(ty))) {
+        RsDiagnostic.NonStructuralMatchTypeAsConstGenericParameter(typeReference, ty.shortPresentableText)
+            .addToHolder(holder)
+    }
+}
+
+private fun checkConstGenericsDefaults(holder: RsAnnotationHolder, default: RsExpr?) {
+    if (default == null) return
+    CONST_GENERICS_DEFAULTS.check(holder, default, "const generics defaults")
+    when (default.ancestorStrict<RsGenericDeclaration>()) {
+        is RsStructItem,
+        is RsEnumItem,
+        is RsTypeAlias,
+        is RsTraitItem,
+        null -> {}
+        else -> RsDiagnostic.DefaultsConstGenericNotAllowed(default).addToHolder(holder)
+    }
+}
+
+private fun checkConstArguments(holder: RsAnnotationHolder, args: List<RsExpr>) {
+    for (expr in args) {
+        val ok = when (expr) {
+            is RsLitExpr, is RsBlockExpr -> true
+            is RsPathExpr -> !expr.path.hasColonColon
+            is RsUnaryExpr -> expr.minus != null && expr.expr?.type is TyNumeric
+            else -> false
         }
-        else -> CONST_GENERICS
-    }
 
-    if (feature == CONST_GENERICS &&
-        constGenericAvailability == CAN_BE_ADDED &&
-        MIN_CONST_GENERICS.availability(constParameter) == AVAILABLE) {
-        val typeReference = constParameter.typeReference ?: return
-        val message = RsDiagnostic.ForbiddenConstGenericType(typeReference)
-        message.addToHolder(holder)
-        return
+        if (!ok) {
+            RsDiagnostic.InvalidConstGenericArgument(expr).addToHolder(holder)
+        }
     }
-
-    feature.check(holder, constParameter, "const generics")
 }
 
 private fun checkParamAttrs(holder: RsAnnotationHolder, o: RsOuterAttributeOwner) {
@@ -1375,65 +1600,67 @@ private fun checkParamAttrs(holder: RsAnnotationHolder, o: RsOuterAttributeOwner
     diagnostic.addToHolder(holder)
 }
 
-private fun PsiElement.nameOrImportedName(): String? =
-    when (this) {
-        is RsNamedElement -> name
-        is RsUseSpeck -> nameInScope
-        else -> null
-    }
-
 private val RsNamedElement.namespacesForDuplicatesCheck: Set<Namespace>
     get() = when (this) {
+        // technically const parameters has VALUES namespace,
+        // and type parameters has TYPES namespace,
+        // but still const and type parameter with same name are not allowed.
         is RsConstParameter -> TYPES_N_VALUES
+        is RsExternCrateItem -> TYPES
         else -> namespaces
     }
+
+private data class DuplicateInfo(
+    val namespace: Namespace,
+    val name: String,
+    /** all elements in scope with this [name] and [namespace] */
+    val elements: List<RsElement>,
+)
+
+private typealias DuplicatesMap = Map<RsElement, DuplicateInfo>
 
 private fun AnnotationSession.duplicatesByNamespace(
     owner: PsiElement,
     recursively: Boolean
-): Map<Namespace, Set<PsiElement>> {
+): DuplicatesMap {
     if (owner.parent is RsFnPointerType) return emptyMap()
-
-    fun PsiElement.namespaced(): Sequence<Pair<Namespace, PsiElement>> =
-        when (this) {
-            is RsNamedElement -> namespacesForDuplicatesCheck
-            is RsUseSpeck -> namespaces
-            else -> emptySet()
-        }.asSequence().map { Pair(it, this) }
 
     val fileMap = fileDuplicatesMap()
     fileMap[owner]?.let { return it }
 
-    val importedNames = (owner as? RsItemsOwner)
-        ?.expandedItemsCached
-        ?.namedImports
-        ?.asSequence()
-        ?.mapNotNull { it.path.parent as? RsUseSpeck }
-        .orEmpty()
-    val namedChildren = owner
-        .namedChildren(recursively, stopAt = RsFnPointerType::class.java)
-        .filter { it !is RsMacro }
-    val duplicates: Map<Namespace, Set<PsiElement>> =
-        (namedChildren + importedNames)
-            .filter { it !is RsExternCrateItem } // extern crates can have aliases.
-            .filter {
-                val name = it.nameOrImportedName()
-                name != null && name != "_"
+    @Suppress("ReplaceWithEnumMap")
+    val itemsAll: MutableMap<Namespace, MutableMap<String, MutableList<RsElement>>> = hashMapOf()
+    fun addItem(item: RsElement, namespaces: Set<Namespace>, name: String) {
+        if (!item.existsAfterExpansion || item.isCfgUnknown) return
+        for (namespace in namespaces) {
+            itemsAll.getOrPut(namespace, ::HashMap).getOrPut(name, ::SmartList).add(item)
+        }
+    }
+
+    if (owner is RsItemsOwner) {
+        for (import in owner.expandedItemsCached.namedImports) {
+            val useSpeck = import.path.parent as? RsUseSpeck ?: continue
+            val nameInScope = import.nameInScope.takeIf { it != "_" } ?: continue
+            addItem(useSpeck, useSpeck.namespaces, nameInScope)
+        }
+    }
+
+    for (item in owner.namedChildren(recursively, stopAt = RsFnPointerType::class.java)) {
+        if (item is RsMacro) continue
+        val name = (item as? RsExternCrateItem)?.nameWithAlias ?: item.name ?: continue
+        addItem(item, item.namespacesForDuplicatesCheck, name)
+    }
+
+    val duplicates = itemsAll
+        .flatMap { (namespace, itemsByName) ->
+            itemsByName.flatMap label@{ (name, items) ->
+                if (items.size == 1) return@label emptyList()
+                items.map { item ->
+                    item to DuplicateInfo(namespace, name, items)
+                }
             }
-            .filter { it.existsAfterExpansion && !it.isCfgUnknown }
-            .flatMap { it.namespaced() }
-            .groupBy { it.first }       // Group by namespace
-            .map { entry ->
-                val (namespace, items) = entry
-                namespace to items.asSequence()
-                    .map { it.second }
-                    .groupBy { it.nameOrImportedName() }
-                    .map { it.value }
-                    .filter { it.size > 1 }
-                    .flatten()
-                    .toSet()
-            }
-            .toMap()
+        }
+        .toMap(hashMapOf())
 
     fileMap[owner] = duplicates
     return duplicates
@@ -1454,9 +1681,9 @@ private fun PsiElement.namedChildren(recursively: Boolean, stopAt: Class<*>? = n
 
 private val DUPLICATES_BY_SCOPE = Key<MutableMap<
     PsiElement,
-    Map<Namespace, Set<PsiElement>>>>("org.rust.ide.annotator.RsErrorAnnotator.duplicates")
+    DuplicatesMap>>("org.rust.ide.annotator.RsErrorAnnotator.duplicates")
 
-private fun AnnotationSession.fileDuplicatesMap(): MutableMap<PsiElement, Map<Namespace, Set<PsiElement>>> {
+private fun AnnotationSession.fileDuplicatesMap(): MutableMap<PsiElement, DuplicatesMap> {
     var map = getUserData(DUPLICATES_BY_SCOPE)
     if (map == null) {
         map = mutableMapOf()
@@ -1470,6 +1697,14 @@ data class FunctionCallContext(
     val functionType: FunctionType,
     val function: RsFunction? = null
 )
+
+fun RsValueArgumentList.getFunctionCallContext(): FunctionCallContext? {
+    return when (val parent = parent) {
+        is RsCallExpr -> parent.getFunctionCallContext()
+        is RsMethodCall -> parent.getFunctionCallContext()
+        else -> null
+    }
+}
 
 fun RsCallExpr.getFunctionCallContext(): FunctionCallContext? {
     val path = (expr as? RsPathExpr)?.path ?: return null
@@ -1514,7 +1749,7 @@ fun RsMethodCall.getFunctionCallContext(): FunctionCallContext? {
 private fun isValidSelfSuperPrefix(path: RsPath): Boolean {
     if (path.self == null && path.`super` == null) return true
     if (path.path == null && path.coloncolon != null) return false
-    if (path.self != null && path.path != null) return false
+    if (path.self != null && path.path != null && path.parentOfType<RsUseGroup>() == null) return false
     if (path.`super` != null) {
         val q = path.path ?: return true
         return q.self != null || q.`super` != null
@@ -1528,8 +1763,9 @@ private fun checkTypesAreSized(holder: RsAnnotationHolder, fn: RsFunction) {
     if (arguments.isEmpty() && retType == null) return
 
     val owner = fn.owner
+    val lookup = ImplLookup.relativeTo(fn)
 
-    fun isError(ty: Ty): Boolean = !ty.isSized() &&
+    fun isError(ty: Ty): Boolean = !lookup.isSized(ty) &&
         // '?Sized' type parameter types in abstract trait method is not an error
         !(owner is RsAbstractableOwner.Trait && fn.isAbstract)
 
@@ -1574,3 +1810,22 @@ private fun RsAttr.isBuiltinWithName(target: String): Boolean {
 
 private val RsPat.isTopLevel: Boolean
     get() = findBinding()?.topLevelPattern == this
+
+private fun String?.isIllegalLifetimeName(edition: Edition?): Boolean {
+    if (this == null || this in RESERVED_LIFETIME_NAMES) return false
+    return drop(1) in keywords(edition)
+}
+
+private fun String.isInvalidLabelName(edition: Edition?): Boolean = removePrefix("'") in keywords(edition)
+
+private fun keywords(edition: Edition?): Set<String> =
+    if (edition == null || edition > Edition.EDITION_2015) KEYWORDS_EDITION_2018 else KEYWORDS_EDITION_2015
+
+private val KEYWORDS_EDITION_2015: Set<String> = hashSetOf(
+    "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+    "trait", "true", "type", "unsafe", "use", "where", "while"
+)
+
+private val KEYWORDS_EDITION_2018: Set<String> = KEYWORDS_EDITION_2015 + hashSetOf("async", "await", "dyn", "try")

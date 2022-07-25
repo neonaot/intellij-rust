@@ -56,12 +56,70 @@ pub fn function_like_do_brace_println_and_process_exit(input: TokenStream) -> To
     std::process::exit(101)
 }
 
+#[proc_macro]
+pub fn function_like_do_println_braces(input: TokenStream) -> TokenStream {
+    println!("{{}}");
+    input
+}
+
+#[proc_macro]
+pub fn function_like_do_println_text_in_braces(input: TokenStream) -> TokenStream {
+    println!("{{hey there}}");
+    input
+}
+
+#[proc_macro]
+pub fn function_like_reverse_spans(item: TokenStream) -> TokenStream {
+    let tts = item.into_iter().collect::<Vec<_>>();
+    tts.iter().enumerate().map(|(i, tt)| {
+        let mut tt2 = tt.clone();
+        tt2.set_span(tts[tts.len() - 1 - i].span());
+        tt2
+    }).collect::<TokenStream>()
+}
+
 #[proc_macro_derive(DeriveImplForFoo)]
 pub fn derive_impl_for_foo(_item: TokenStream) -> TokenStream {
    "impl Foo { fn foo(&self) -> Bar {} }".parse().unwrap()
 }
 
+#[proc_macro_derive(DeriveStructFooDeclaration)]
+pub fn derive_struct_foo_declaration(_item: TokenStream) -> TokenStream {
+   "struct Foo;".parse().unwrap()
+}
+
+#[proc_macro_derive(DeriveMacroFooThatExpandsToStructFoo)]
+pub fn derive_macro_foo_that_expands_to_struct_foo(_item: TokenStream) -> TokenStream {
+   "macro_rules! foo { () => { struct Foo; } }".parse().unwrap()
+}
+
+#[proc_macro_derive(DeriveMacroFooInvocation)]
+pub fn derive_macro_foo_invocation(_item: TokenStream) -> TokenStream {
+   "foo!{}".parse().unwrap()
+}
+
+#[proc_macro_derive(DeriveMacroBarInvocation)]
+pub fn derive_macro_bar_invocation(_item: TokenStream) -> TokenStream {
+   "bar!{}".parse().unwrap()
+}
+
 #[proc_macro]
 pub fn function_like_generates_impl_for_foo(_input: TokenStream) -> TokenStream {
    "impl Foo { fn foo(&self) -> Bar {} }".parse().unwrap()
+}
+
+#[proc_macro_attribute]
+pub fn attr_as_is(_attr: TokenStream, item: TokenStream) -> TokenStream {
+   item
+}
+
+#[proc_macro_attribute]
+pub fn attr_replace_with_attr(attr: TokenStream, item: TokenStream) -> TokenStream {
+    attr
+}
+
+/// The macro is hardcoded to be an "identity" macro in `HardcodedProcMacroProperties.kt`
+#[proc_macro_attribute]
+pub fn attr_hardcoded_not_a_macro(_attr: TokenStream, item: TokenStream) -> TokenStream {
+   panic!("Must not be called")
 }

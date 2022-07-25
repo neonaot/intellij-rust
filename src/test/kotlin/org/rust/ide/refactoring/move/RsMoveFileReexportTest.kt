@@ -5,10 +5,6 @@
 
 package org.rust.ide.refactoring.move
 
-import org.rust.MockEdition
-import org.rust.cargo.project.workspace.CargoWorkspace
-
-@MockEdition(CargoWorkspace.Edition.EDITION_2018)
 class RsMoveFileReexportTest : RsMoveFileTestBase() {
     override val dataPath = "org/rust/ide/refactoring/move/fixtures/"
 
@@ -43,7 +39,6 @@ class RsMoveFileReexportTest : RsMoveFileTestBase() {
         mod mod2;
     //- mod1/mod.rs
         pub use mod1_inner::mod1_func;
-
         mod mod1_inner {  // private
             pub fn mod1_func() {}
         }
@@ -226,7 +221,6 @@ class RsMoveFileReexportTest : RsMoveFileTestBase() {
     //- mod1/mod.rs
         pub mod inner1 {
             pub use inner2::*;
-
             mod inner2 {
                 pub fn inner2_func() {}
             }
@@ -291,7 +285,6 @@ class RsMoveFileReexportTest : RsMoveFileTestBase() {
 
         pub mod inner1 {
             use inner2::*;
-
             mod inner2 {
                 pub fn inner2_func() {}
             }

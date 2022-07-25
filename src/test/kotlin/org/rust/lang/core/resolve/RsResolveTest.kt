@@ -5,10 +5,7 @@
 
 package org.rust.lang.core.resolve
 
-import org.rust.MockEdition
 import org.rust.MockRustcVersion
-import org.rust.cargo.project.workspace.CargoWorkspace
-import org.rust.ignoreInNewResolve
 import org.rust.lang.core.psi.RsImplItem
 import org.rust.lang.core.psi.ext.RsFieldDecl
 
@@ -107,6 +104,34 @@ class RsResolveTest : RsResolveTestBase() {
                    //X
                         if i < 5 => {
                          //^
+                    i
+                }
+                _ => 0
+            };
+        }
+    """)
+
+    fun `test match if let 1`() = checkByCode("""
+        fn main() {
+            match Some(92) {
+                Some(i)
+                         if let Some(i) = Some(i) => {
+                                   //X
+                    i
+                  //^
+                }
+                _ => 0
+            };
+        }
+    """)
+
+    fun `test match if let 2`() = checkByCode("""
+        fn main() {
+            match Some(92) {
+                Some(i)
+                   //X
+                         if let Some(i) = Some(i) => {
+                                             //^
                     i
                 }
                 _ => 0
@@ -546,7 +571,6 @@ class RsResolveTest : RsResolveTestBase() {
          //X
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test nested super 2`() = checkByCode("""
         mod foo {
             mod bar {
@@ -562,7 +586,6 @@ class RsResolveTest : RsResolveTestBase() {
          //X
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test function and mod with same name`() = checkByCode("""
         mod foo {}
 
@@ -591,15 +614,6 @@ class RsResolveTest : RsResolveTestBase() {
               //X
             print!("{} + {foo}", x, foo = y);
                                         //^
-        }
-    """)
-
-    fun `test await argument`() = checkByCode("""
-        fn main() {
-            let x = 42;
-              //X
-            await!(x);
-                 //^
         }
     """)
 
@@ -668,16 +682,6 @@ class RsResolveTest : RsResolveTestBase() {
         fn main() {
             let _ = T1::A;
         }             //^
-    """)
-
-    fun `test local fn`() = checkByCode("""
-        fn main() {
-            foo();
-           //^
-
-            fn foo() {}
-              //X
-        }
     """)
 
     fun `test struct field named`() = checkByCode("""
@@ -983,9 +987,8 @@ class RsResolveTest : RsResolveTestBase() {
           //X
         mod inner {
             fn main() {
-                ::inner::super::foo();
-                               //^
-            }
+                crate::inner::super::foo();
+            }                      //^
         }
     """)
 
@@ -1283,6 +1286,30 @@ class RsResolveTest : RsResolveTestBase() {
         }
     """)
 
+    fun `test pattern constant binding ambiguity enum variant`() = checkByCode("""
+        enum Enum { Var1, Var2 }
+                  //X
+        use Enum::Var1;
+        fn main() {
+            match Enum::Var1 {
+                Var1 => {}
+                //^
+                _ => {}
+            }
+        }
+    """)
+
+    fun `test pattern constant binding ambiguity unit struct`() = checkByCode("""
+        struct Foo;
+             //X
+        fn main() {
+            match Foo {
+                Foo => {}
+                //^
+            }
+        }
+    """)
+
     fun `test match enum path`() = checkByCode("""
         enum Enum { Var1, Var2 }
                   //X
@@ -1398,7 +1425,6 @@ class RsResolveTest : RsResolveTestBase() {
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test 'pub (in incomplete_path)'`() = checkByCode("""
         mod foo {
             mod bar {
@@ -1453,7 +1479,7 @@ class RsResolveTest : RsResolveTestBase() {
 
         use self::Foo;
                 //^
-    """, ItemResolutionTestmarks.externCrateSelfWithoutAlias.ignoreInNewResolve(project))
+    """)
 
     fun `test const generic in fn`() = checkByCode("""
         fn f<const AAA: usize>() {

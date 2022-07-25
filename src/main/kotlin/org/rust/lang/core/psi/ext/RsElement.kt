@@ -8,24 +8,25 @@ package org.rust.lang.core.psi.ext
 import com.intellij.extapi.psi.ASTWrapperPsiElement
 import com.intellij.extapi.psi.StubBasedPsiElementBase
 import com.intellij.lang.ASTNode
-import com.intellij.psi.PsiComment
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiFileSystemItem
-import com.intellij.psi.PsiWhiteSpace
+import com.intellij.psi.*
+import com.intellij.psi.search.SearchScope
+import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.stubs.IStubElementType
 import com.intellij.psi.stubs.StubElement
+import com.intellij.util.Query
 import org.rust.cargo.project.model.CargoProject
 import org.rust.cargo.project.model.cargoProjects
 import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.lang.core.completion.getOriginalOrSelf
 import org.rust.lang.core.crate.Crate
 import org.rust.lang.core.crate.findDependency
 import org.rust.lang.core.macros.findNavigationTargetIfMacroExpansion
-import org.rust.lang.core.psi.*
-import org.rust.lang.core.resolve.Namespace
-import org.rust.lang.core.resolve.createProcessor
-import org.rust.lang.core.resolve.processLocalVariables
-import org.rust.lang.core.resolve.processNestedScopesUpwards
+import org.rust.lang.core.psi.RsConstant
+import org.rust.lang.core.psi.RsElementTypes
+import org.rust.lang.core.psi.RsFile
+import org.rust.lang.core.psi.RsPatBinding
+import org.rust.lang.core.resolve.*
 
 interface RsElement : PsiElement {
     /**
@@ -62,13 +63,13 @@ val RsElement.containingCrate: Crate?
 
 val RsElement.containingCargoPackage: CargoWorkspace.Package? get() = containingCargoTarget?.pkg
 
-val PsiElement.edition: CargoWorkspace.Edition?
+val PsiElement.edition: Edition?
     get() = contextOrSelf<RsElement>()?.containingCrate?.edition
 
 val PsiElement.isAtLeastEdition2018: Boolean
     get() {
-        val edition = edition ?: return false
-        return edition >= CargoWorkspace.Edition.EDITION_2018
+        val edition = edition ?: Edition.DEFAULT
+        return edition >= Edition.EDITION_2018
     }
 
 /**
@@ -85,7 +86,7 @@ val PsiElement.isAtLeastEdition2018: Boolean
  * Constant-like element can be: real constant, static variable, and enum variant without fields.
  */
 val RsElement.isConstantLike: Boolean
-    get() = this is RsConstant || (this is RsEnumVariant && isFieldless)
+    get() = this is RsConstant || (this is RsFieldsOwner && isFieldless)
 
 fun RsElement.findDependencyCrateRoot(dependencyName: String): RsFile? {
     return containingCrate
@@ -143,13 +144,25 @@ fun RsElement.findInScope(name: String, ns: Set<Namespace>): PsiElement? {
 fun RsElement.hasInScope(name: String, ns: Set<Namespace>): Boolean =
     findInScope(name, ns) != null
 
-fun RsElement.getVisibleBindings(): Map<String, RsPatBinding> {
+fun RsElement.getLocalVariableVisibleBindings(): Map<String, RsPatBinding> {
     val bindings = HashMap<String, RsPatBinding>()
     processLocalVariables(this) { variable ->
         variable.name?.let {
             bindings[it] = variable
         }
     }
+    return bindings
+}
+
+fun RsElement.getAllVisibleBindings(): Set<String> {
+    val bindings = mutableSetOf<String>()
+    val processor = createProcessor { entry ->
+        val element = entry.element as? RsNameIdentifierOwner ?: return@createProcessor false
+        val name = element.name ?: return@createProcessor false
+        bindings.add(name)
+        false
+    }
+    processNestedScopesUpwards(this, VALUES, processor)
     return bindings
 }
 
@@ -179,14 +192,22 @@ fun RsElement.deleteWithSurroundingComma() {
  * See [deleteWithSurroundingComma].
  */
 fun RsElement.deleteWithSurroundingCommaAndWhitespace() {
-    while (nextSibling?.isWhitespaceOrComment == true) {
-        nextSibling?.delete()
+    val toDelete = rightSiblings.takeWhile { it.isWhitespaceOrComment } +
+        leftSiblings.takeWhile { it.isWhitespaceOrComment }
+    toDelete.forEach {
+        it.delete()
     }
-    while (prevSibling?.isWhitespaceOrComment == true) {
-        prevSibling?.delete()
-    }
+
     deleteWithSurroundingComma()
 }
 
 private val PsiElement.isWhitespaceOrComment
     get(): Boolean = this is PsiWhiteSpace || this is PsiComment
+
+fun RsElement.searchReferences(scope: SearchScope? = null): Query<PsiReference> {
+    return if (scope == null) {
+        ReferencesSearch.search(this)
+    } else {
+        ReferencesSearch.search(this, scope)
+    }
+}

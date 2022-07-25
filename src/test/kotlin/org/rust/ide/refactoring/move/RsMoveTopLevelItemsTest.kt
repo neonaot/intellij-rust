@@ -5,12 +5,13 @@
 
 package org.rust.ide.refactoring.move
 
-import org.rust.*
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.ExpandMacros
+import org.rust.ProjectDescriptor
+import org.rust.WithEnabledInspections
+import org.rust.WithStdlibRustProjectDescriptor
 import org.rust.ide.inspections.lints.RsUnusedImportInspection
 
 @WithEnabledInspections(RsUnusedImportInspection::class)
-@MockEdition(CargoWorkspace.Edition.EDITION_2018)
 class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
 
     fun `test simple`() = doTest("""
@@ -389,8 +390,8 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     """, """
     //- lib.rs
         mod mod1 {
-            use crate::mod2::{foo1, Foo3, Foo4, Foo5, Foo6, Foo7};
             use crate::mod2;
+            use crate::mod2::{foo1, Foo3, Foo4, Foo5, Foo6, Foo7};
 
             fn bar() {
                 foo1::foo1_func();
@@ -914,7 +915,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
     fun `test copy usual imports from old mod`() = doTest("""
     //- lib.rs
         mod mod1 {
@@ -971,8 +971,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     """, """
     //- lib.rs
         mod mod1 {
-            use inner::Bar4;
-
             pub mod inner {
                 pub fn bar3() {}
                 pub struct Bar4 {}
@@ -994,7 +992,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
     fun `test outside reference to function in old mod when move from crate root`() = doTest("""
     //- lib.rs
         fn foo/*caret*/() { bar(); }
@@ -1008,7 +1005,8 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    fun `test copy trait imports from old mod`() = doTest("""
+
+    fun `test copy trait imports from old mod (method call)`() = doTest("""
     //- lib.rs
         mod mod1 {
             use crate::bar::Bar;
@@ -1033,7 +1031,7 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    fun `test outside reference to method of trait in old mod`() = doTest("""
+    fun `test outside reference to trait in old mod (method call)`() = doTest("""
     //- lib.rs
         mod mod1 {
             fn foo/*caret*/() { ().bar(); }
@@ -1054,7 +1052,7 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    fun `test self reference to trait method`() = doTest("""
+    fun `test self reference to trait (method call)`() = doTest("""
     //- lib.rs
         mod mod1 {
             fn foo1/*caret*/() { ().foo(); }
@@ -1074,7 +1072,7 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    fun `test inside reference to method of moved trait`() = doTest("""
+    fun `test inside reference to moved trait (method call)`() = doTest("""
     //- lib.rs
         mod mod1 {
             pub trait Foo/*caret*/ { fn foo(&self) {} }
@@ -1095,6 +1093,194 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
             impl Foo for () {}
         }
     """)
+
+
+    fun `test copy trait imports from old mod (UFCS)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            use crate::foo::{Foo, Trait};
+            fn func/*caret*/(foo: &Foo) { Foo::func(foo); }
+        }
+        mod mod2/*target*/ {}
+        mod foo {
+            pub struct Foo;
+            pub trait Trait { fn func(&self) {} }
+            impl Trait for Foo {}
+        }
+    """, """
+    //- lib.rs
+        mod mod1 {}
+        mod mod2 {
+            use crate::foo::{Foo, Trait};
+
+            fn func(foo: &Foo) { Foo::func(foo); }
+        }
+        mod foo {
+            pub struct Foo;
+            pub trait Trait { fn func(&self) {} }
+            impl Trait for Foo {}
+        }
+    """)
+
+    fun `test outside reference to trait in old mod (UFCS)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            pub struct Foo;
+            pub trait Trait { fn func(&self) {} }
+            impl Trait for Foo {}
+            fn func/*caret*/(foo: &Foo) { Foo::func(foo); }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {
+            pub struct Foo;
+            pub trait Trait { fn func(&self) {} }
+            impl Trait for Foo {}
+        }
+        mod mod2 {
+            use crate::mod1::{Foo, Trait};
+
+            fn func(foo: &Foo) { Foo::func(foo); }
+        }
+    """)
+
+    fun `test self reference to trait (UFCS)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            struct Foo/*caret*/;
+            pub trait Trait/*caret*/ { fn func(&self) {} }
+            impl Trait for Foo/*caret*/ {}
+            fn func/*caret*/(foo: &Foo) { Foo::func(foo); }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {}
+        mod mod2 {
+            struct Foo;
+
+            pub trait Trait { fn func(&self) {} }
+
+            impl Trait for Foo {}
+
+            fn func(foo: &Foo) { Foo::func(foo); }
+        }
+    """)
+
+    fun `test inside reference to moved trait (UFCS)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            pub trait Trait/*caret*/ { fn func(&self) {} }
+            pub struct Foo;
+            impl Trait for Foo/*caret*/ {}
+            fn func(foo: &Foo) { Foo::func(foo); }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {
+            use crate::mod2::Trait;
+
+            pub struct Foo;
+
+            fn func(foo: &Foo) { Foo::func(foo); }
+        }
+        mod mod2 {
+            use crate::mod1::Foo;
+
+            pub trait Trait { fn func(&self) {} }
+
+            impl Trait for Foo {}
+        }
+    """)
+
+
+    fun `test copy trait imports from old mod (assoc const)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            use crate::foo::{Foo, Trait};
+            fn func/*caret*/() {
+                let _ = Foo::C;
+            }
+        }
+
+        mod mod2/*target*/ {}
+
+        mod foo {
+            pub trait Trait { const C: i32 = 1; }
+            pub struct Foo;
+            impl Trait for Foo {}
+        }
+    """, """
+    //- lib.rs
+        mod mod1 {}
+
+        mod mod2 {
+            use crate::foo::{Foo, Trait};
+
+            fn func() {
+                let _ = Foo::C;
+            }
+        }
+
+        mod foo {
+            pub trait Trait { const C: i32 = 1; }
+            pub struct Foo;
+            impl Trait for Foo {}
+        }
+    """)
+
+    fun `test self reference to trait (assoc const)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            struct Foo/*caret*/;
+            pub trait Trait/*caret*/ { const C: i32 = 0; }
+            impl Trait for Foo/*caret*/ {}
+            fn func/*caret*/() { let _ = Foo::C; }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {}
+        mod mod2 {
+            struct Foo;
+
+            pub trait Trait { const C: i32 = 0; }
+
+            impl Trait for Foo {}
+
+            fn func() { let _ = Foo::C; }
+        }
+    """)
+
+    fun `test inside reference to moved trait (assoc const)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            pub trait Trait/*caret*/ { const C: i32 = 0; }
+            pub struct Foo;
+            impl Trait for Foo/*caret*/ {}
+            fn func() { let _ = Foo::C; }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {
+            use crate::mod2::Trait;
+
+            pub struct Foo;
+
+            fn func() { let _ = Foo::C; }
+        }
+        mod mod2 {
+            use crate::mod1::Foo;
+
+            pub trait Trait { const C: i32 = 0; }
+
+            impl Trait for Foo {}
+        }
+    """)
+
 
     fun `test outside references which starts with super 1`() = doTest("""
     //- lib.rs
@@ -1264,7 +1450,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod mod2 {
             pub mod inner1 {
                 pub use inner2::*;
-
                 mod inner2 { pub fn bar2() {} }
                 pub fn bar1() {}
             }
@@ -1365,7 +1550,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     """)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
-    @UseNewResolve
     fun `test outside reference to items from stdlib`() = doTest("""
     //- lib.rs
         mod mod1 {
@@ -1388,7 +1572,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     """)
 
     @ProjectDescriptor(WithStdlibRustProjectDescriptor::class)
-    @UseNewResolve
     fun `test outside reference to Arc from stdlib`() = doTest("""
     //- lib.rs
         mod mod1 {
@@ -1496,7 +1679,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
     fun `test self references from inner mod 1`() = doTest("""
     //- lib.rs
         mod mod1 {
@@ -1518,7 +1700,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod mod2 {
             mod foo1 {
                 use crate::mod2;
-
                 fn test() { mod2::bar1(); }
             }
 
@@ -1534,7 +1715,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
     fun `test self references from inner mod 2`() = doTest("""
     //- lib.rs
         mod mod1 {
@@ -1556,7 +1736,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod mod2 {
             mod foo1 {
                 use crate::mod2::Bar1;
-
                 fn test() { let _ = Bar1 {}; }
             }
 
@@ -1604,8 +1783,7 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
-    fun `test self references to inner mod`() = doTest("""
+    fun `test self references to inner mod (absolute path)`() = doTest("""
     //- lib.rs
         mod mod1 {
             mod foo1/*caret*/ {
@@ -1623,6 +1801,30 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
             }
 
             fn foo2() { foo1::func(); }
+        }
+    """)
+
+    fun `test self references to inner mod (using import)`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            use foo1::func;
+            mod foo1/*caret*/ {
+                pub fn func() {}
+            }
+            fn foo2/*caret*/() { func(); }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {}
+        mod mod2 {
+            use foo1::func;
+
+            pub mod foo1 {
+                pub fn func() {}
+            }
+
+            fn foo2() { func(); }
         }
     """)
 
@@ -1663,7 +1865,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
 
             pub mod inner1 {
                 pub use inner2::*;
-
                 mod inner2 { pub fn foo3() {} }
                 pub fn foo2() {}
             }
@@ -1850,7 +2051,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod usage {
             use crate::mod2::foo1;
             use crate::mod2::Foo2;
-
             fn test() {
                 foo1();
                 let _ = Foo2 {};
@@ -1884,7 +2084,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
 
         mod usage {
             use crate::mod2;
-
             fn test() {
                 mod2::foo1();
                 let _ = mod2::Foo2 {};
@@ -1892,7 +2091,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
     """)
 
-    @UseNewResolve
     fun `test inside references, should add import for grandparent mod`() = doTest("""
     //- lib.rs
         mod inner1 {
@@ -1963,7 +2161,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod inner {
             // can't use this reexport for foo
             pub use mod2::bar;
-
             pub mod mod2 {
                 pub fn bar() {}
 
@@ -2003,7 +2200,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod inner1 {
             pub use bar::*;
-
             mod mod1 {}
             // private
             mod bar { pub fn bar_func() {} }
@@ -2027,7 +2223,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod mod1 {
             pub use mod1_inner::bar;
-
             mod mod1_inner {
                 pub fn bar() {}
             }
@@ -2056,7 +2251,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod inner {
             pub use mod1::*;
-
             // private
             mod mod1 {}
             pub mod mod2 {
@@ -2087,7 +2281,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod inner {
             pub use mod2::*;
-
             pub mod mod1 {}
             // private
             mod mod2 {
@@ -2119,7 +2312,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod inner1 {
             pub use inner2::*;
-
             mod inner2 {
                 pub mod mod1 {}
                 pub mod mod2 {
@@ -2152,7 +2344,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod inner1 {
             pub use inner2::*;
-
             mod inner2 {  // private
                 pub mod mod1 {}
                 pub mod mod2 {
@@ -2444,7 +2635,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod mod1 {
             use Bar::*;
-
             pub enum Bar { Bar1, Bar2 }
         }
         mod mod2 {
@@ -2501,7 +2691,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
     //- lib.rs
         mod mod1 {
             use Bar::*;
-
             pub enum Bar { Bar1, Bar2 }
         }
         mod mod2 {
@@ -2638,7 +2827,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         mod mod2/*target*/ {}
     """)
 
-    @UseNewResolve
     fun `test outside references with import alias`() = doTest("""
     //- lib.rs
         mod foo {
@@ -2684,7 +2872,6 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
 
             mod inner2 {
                 use crate::mod2::inner1::Foo as Bar;
-
                 fn test(bar: Bar) {}
             }
         }
@@ -2710,10 +2897,55 @@ class RsMoveTopLevelItemsTest : RsMoveTopLevelItemsTestBase() {
         }
         mod usage {
             use crate::mod2::foo as bar;
-
             fn test() {
                 bar();
             }
+        }
+    """)
+
+    fun `test don't reorder use items`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            mod inner {}
+            use aaa;
+            fn foo/*caret*/() {}
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {
+            mod inner {}
+            use aaa;
+        }
+        mod mod2 {
+            fn foo() {}
+        }
+    """)
+
+    fun `test insert import at correct location`() = doTest("""
+    //- lib.rs
+        mod mod1 {
+            use crate::mod1::A;
+            use crate::mod3::C;
+            fn foo/*caret*/() {}
+            fn bar() {
+                foo();
+            }
+        }
+        mod mod2/*target*/ {}
+    """, """
+    //- lib.rs
+        mod mod1 {
+            use crate::mod1::A;
+            use crate::mod2;
+            use crate::mod3::C;
+
+            fn bar() {
+                mod2::foo();
+            }
+        }
+        mod mod2 {
+            pub fn foo() {}
         }
     """)
 

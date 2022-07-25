@@ -3,8 +3,8 @@
 
     <depends>com.intellij.modules.lang</depends>
 
-    <xi:include href="/META-INF/platform-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <xi:include href="/META-INF/experiments.xml" xpointer="xpointer(/idea-plugin/*)"/>
+    <xi:include href="/META-INF/platform-rust-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- Rust -->
@@ -37,6 +37,7 @@
         <!-- Sources -->
 
         <generatedSourcesFilter implementation="org.rust.cargo.project.model.RsGeneratedSourcesFilter"/>
+        <testSourcesFilter implementation="org.rust.cargo.project.model.RsTestSourcesFilter"/>
         <writingAccessProvider implementation="org.rust.cargo.project.model.RsGeneratedSourcesWritingAccessProvider"/>
 
         <!-- PSI managing -->
@@ -69,10 +70,11 @@
 
         <!-- Formatter -->
 
-        <!--suppress PluginXmlValidity -->
         <lang.formatter language="Rust" implementationClass="org.rust.ide.formatter.RsFormattingModelBuilder"/>
+        <formattingService implementation="org.rust.ide.formatter.RustfmtFormattingService"/>
         <preFormatProcessor implementation="org.rust.ide.formatter.processors.RsMatchArmCommaFormatProcessor"/>
         <preFormatProcessor implementation="org.rust.ide.formatter.processors.RsStatementSemicolonFormatProcessor"/>
+        <postFormatProcessor implementation="org.rust.ide.formatter.processors.RsTrailingCommaFormatProcessor"/>
 
         <!-- Refactoring support -->
 
@@ -135,9 +137,13 @@
         <lang.smartEnterProcessor language="Rust"
                                   implementationClass="org.rust.ide.typing.assist.RsSmartEnterProcessor"/>
 
+        <!-- Copy paste processors -->
+        <copyPastePostProcessor implementation="org.rust.ide.typing.paste.RsConvertJsonToStructCopyPasteProcessor"/>
+
         <!-- Imports -->
 
         <lang.importOptimizer language="Rust" implementationClass="org.rust.ide.refactoring.RsImportOptimizer"/>
+        <referenceImporter implementation="org.rust.ide.inspections.import.RsReferenceImporter"/>
         <autoImportOptionsProvider instance="org.rust.ide.settings.RsAutoImportOptions"/>
 
         <!-- Navigation -->
@@ -240,6 +246,9 @@
         <!-- Completion -->
 
         <codeCompletionConfigurable instance="org.rust.ide.settings.RsCodeCompletionConfigurable"/>
+
+        <completion.confidence language="Rust"
+                               implementationClass="org.rust.lang.core.completion.RsCompletionConfidence"/>
 
         <completion.contributor language="Rust"
                                 implementationClass="org.rust.lang.core.completion.RsKeywordCompletionContributor"
@@ -480,6 +489,11 @@
                          implementationClass="org.rust.ide.inspections.RsSimplifyBooleanExpressionInspection"/>
 
         <localInspection language="Rust" groupName="Rust"
+                         displayName="Condition of 'if' expression is constant"
+                         enabledByDefault="true" level="WARNING"
+                         implementationClass="org.rust.ide.inspections.RsConstantConditionIfInspection"/>
+
+        <localInspection language="Rust" groupName="Rust"
                          displayName="No mutable required"
                          enabledByDefault="false" level="WARNING"
                          implementationClass="org.rust.ide.inspections.RsVariableMutableInspection"/>
@@ -490,9 +504,19 @@
                          implementationClass="org.rust.ide.inspections.RsWrongGenericArgumentsNumberInspection"/>
 
         <localInspection language="Rust" groupName="Rust"
+                         displayName="Wrong generic arguments order"
+                         enabledByDefault="true" level="ERROR"
+                         implementationClass="org.rust.ide.inspections.RsWrongGenericArgumentsOrderInspection"/>
+
+        <localInspection language="Rust" groupName="Rust"
                          displayName="Wrong lifetime parameters number"
                          enabledByDefault="true" level="ERROR"
                          implementationClass="org.rust.ide.inspections.RsWrongLifetimeParametersNumberInspection"/>
+
+        <localInspection language="Rust" groupName="Rust"
+                         displayName="Wrong type or const parameters number"
+                         enabledByDefault="true" level="ERROR"
+                         implementationClass="org.rust.ide.inspections.RsWrongGenericParametersNumberInspection"/>
 
         <localInspection language="Rust" groupName="Rust"
                          displayName="Re-assign immutable variable"
@@ -513,6 +537,16 @@
                          displayName="Non-shorthand field patterns"
                          enabledByDefault="true" level="WEAK WARNING"
                          implementationClass="org.rust.ide.inspections.lints.RsNonShorthandFieldPatternsInspection"/>
+
+        <localInspection language="Rust" groupPath="Rust" groupName="Lints"
+                         displayName="Unused must_use"
+                         enabledByDefault="true" level="WEAK WARNING"
+                         implementationClass="org.rust.ide.inspections.lints.RsUnusedMustUseInspection"/>
+
+        <localInspection language="Rust" groupPath="Rust" groupName="Lints"
+                         displayName="Double must_use"
+                         enabledByDefault="true" level="WEAK WARNING"
+                         implementationClass="org.rust.ide.inspections.lints.RsDoubleMustUseInspection"/>
 
         <localInspection language="Rust" groupName="Rust"
                          displayName="Assert Equal"
@@ -553,6 +587,11 @@
                          displayName="Cast to bool"
                          enabledByDefault="true" level="ERROR"
                          implementationClass="org.rust.ide.inspections.RsCastToBoolInspection"/>
+
+        <localInspection language="Rust" groupName="Rust"
+                         displayName="Constant refers to statics"
+                         enabledByDefault="true" level="ERROR"
+                         implementationClass="org.rust.ide.inspections.RsConstReferStaticInspection"/>
 
         <localInspection language="Rust" groupName="Rust"
                          displayName="Attribute without parentheses"
@@ -613,6 +652,11 @@
                          displayName="Unused import"
                          enabledByDefault="false" level="WARNING"
                          implementationClass="org.rust.ide.inspections.lints.RsUnusedImportInspection"/>
+
+        <localInspection language="Rust" groupPath="Rust" groupName="Lints"
+                         displayName="Unnecessarily qualified path"
+                         enabledByDefault="true" level="WARNING"
+                         implementationClass="org.rust.ide.inspections.lints.RsUnnecessaryQualificationsInspection"/>
 
         <!-- Surrounders -->
 
@@ -761,6 +805,10 @@
         </intentionAction>
         <intentionAction>
             <className>org.rust.ide.intentions.SplitIfIntention</className>
+            <category>Rust</category>
+        </intentionAction>
+        <intentionAction>
+            <className>org.rust.ide.intentions.MergeIfsIntention</className>
             <category>Rust</category>
         </intentionAction>
         <intentionAction>
@@ -935,12 +983,20 @@
             <className>org.rust.ide.intentions.AddImplTraitIntention</className>
             <category>Rust</category>
         </intentionAction>
+        <intentionAction>
+            <className>org.rust.ide.intentions.ExtractStructFieldsIntention</className>
+            <category>Rust</category>
+        </intentionAction>
+        <intentionAction>
+            <className>org.rust.ide.intentions.UnwrapConstructorIntention</className>
+            <category>Rust</category>
+        </intentionAction>
 
         <!-- Run Configurations -->
 
         <programRunner implementation="org.rust.cargo.runconfig.CargoCommandRunner"/>
         <programRunner implementation="org.rust.cargo.runconfig.CargoTestCommandRunner"/>
-        <programRunner implementation="org.rust.debugger.runconfig.RsDebugAdvertisingRunner"/>
+        <programRunner implementation="org.rust.ide.debugger.runconfig.RsDebugAdvertisingRunner"/>
         <programRunner implementation="org.rust.cargo.runconfig.wasmpack.WasmPackCommandRunner"/>
 
         <configurationType implementation="org.rust.cargo.runconfig.command.CargoCommandConfigurationType"/>
@@ -956,25 +1012,32 @@
 
         <projectTaskRunner implementation="org.rust.cargo.runconfig.buildtool.CargoBuildTaskRunner"/>
 
+        <!-- Run Targets -->
+
+        <executionTargetLanguageRuntimeType implementation="org.rust.cargo.runconfig.target.RsLanguageRuntimeType"/>
+
+        <programRunner implementation="org.rust.cargo.runconfig.target.RsLocalBuildForTargetRunner"/>
+        <programRunner implementation="org.rust.cargo.runconfig.target.RsLocalBuildForTargetRunnerLegacy"/>
+
         <!-- Cargo -->
 
         <projectConfigurable instance="org.rust.cargo.project.configurable.RsProjectConfigurable"
-                             displayName="Rust"
                              groupId="language"
                              id="language.rust"/>
 
-        <projectConfigurable instance="org.rust.cargo.project.configurable.CargoConfigurable"
-                             displayName="Cargo"
+        <projectConfigurable instance="org.rust.cargo.project.configurable.RsExternalLinterConfigurable"
                              parentId="language.rust"
-                             id="language.rust.cargo"/>
+                             id="language.rust.cargo.check"/>
 
         <projectConfigurable instance="org.rust.cargo.project.configurable.RustfmtConfigurable"
-                             displayName="Rustfmt"
                              parentId="language.rust"
                              id="language.rust.rustfmt"/>
 
         <projectService serviceInterface="org.rust.cargo.project.settings.RustProjectSettingsService"
                         serviceImplementation="org.rust.cargo.project.settings.impl.RustProjectSettingsServiceImpl"/>
+
+        <projectService serviceImplementation="org.rust.cargo.project.settings.RustfmtProjectSettingsService"/>
+
         <projectService serviceInterface="org.rust.cargo.project.model.CargoProjectsService"
                         serviceImplementation="org.rust.cargo.project.model.impl.CargoProjectsServiceImpl"
                         testServiceImplementation="org.rust.cargo.project.model.impl.TestCargoProjectsServiceImpl"/>
@@ -987,8 +1050,16 @@
                     factoryClass="org.rust.cargo.project.toolwindow.CargoToolWindowFactory"
                     icon="/icons/tool-window.svg"/>
 
+        <statusBarWidgetFactory id="rustExternalLinterWidget"
+                                implementation="org.rust.ide.status.RsExternalLinterWidgetFactory"
+                                order="first"/>
+
         <additionalLibraryRootsProvider
                 implementation="org.rust.cargo.project.workspace.RsAdditionalLibraryRootsProvider"/>
+
+        <applicationService serviceInterface="org.rust.cargo.util.UnitTestRustcCacheService"
+                            serviceImplementation="org.rust.cargo.util.UnitTestRustcCacheServiceImpl"
+                            testServiceImplementation="org.rust.cargo.util.TestUnitTestRustcCacheService"/>
 
         <!-- Icon Provider -->
 
@@ -996,6 +1067,8 @@
         <iconProvider implementation="org.rust.ide.icons.RsIconProvider"/>
 
         <!-- Indices -->
+
+        <indexedRootsProvider implementation="org.rust.lang.core.indexing.RsIndexableSetContributor"/>
 
         <stubIndex implementation="org.rust.lang.core.stubs.index.RsModulesIndex"/>
         <stubIndex implementation="org.rust.lang.core.stubs.index.RsNamedElementIndex"/>
@@ -1016,7 +1089,6 @@
 
         <editorNotificationProvider implementation="org.rust.ide.notifications.MissingToolchainNotificationProvider"/>
         <editorNotificationProvider implementation="org.rust.ide.notifications.NoCargoProjectNotificationProvider"/>
-        <editorNotificationProvider implementation="org.rust.ide.notifications.RsUntrustedNotificationProvider"/>
 
         <notificationGroup id="Rust Plugin" displayType="BALLOON"/>
         <notificationGroup id="Rust Build Log" displayType="NONE"/>
@@ -1066,10 +1138,9 @@
 
         <projectService serviceInterface="org.rust.lang.core.macros.MacroExpansionManager"
                         serviceImplementation="org.rust.lang.core.macros.MacroExpansionManagerImpl"/>
-        <indexedRootsProvider implementation="org.rust.lang.core.macros.RsIndexableSetContributor"/>
         <writingAccessProvider implementation="org.rust.lang.core.macros.RsMacroExpansionWritingAccessProvider"/>
         <cachesInvalidator implementation="org.rust.lang.core.macros.RsMacroExpansionCachesInvalidator"/>
-        <virtualFileSystem key="rust_macros" implementationClass="org.rust.lang.core.macros.MacroExpansionFileSystem"/>
+        <virtualFileSystem key="rust-macros" implementationClass="org.rust.lang.core.macros.MacroExpansionFileSystem"/>
         <fileTypeOverrider implementation="org.rust.lang.core.macros.RsFileTypeOverriderForMacroExpansionFileSystem"/>
         <globalIndexFilter implementation="org.rust.lang.core.macros.RsGlobalIndexFilterForMacroExpansionFileSystem"/>
         <filetype.prebuiltStubsProvider filetype="Rust"
@@ -1092,6 +1163,7 @@
         <statistics.projectUsagesCollector implementation="org.rust.ide.statistics.RsToolchainUsagesCollector"/>
         <!--suppress PluginXmlValidity -->
         <statistics.projectUsagesCollector implementation="org.rust.ide.statistics.RsProjectUsagesCollector"/>
+        <statistics.counterUsagesCollector implementationClass="org.rust.ide.statistics.RsCounterUsagesCollector"/>
 
         <!-- Registry keys -->
 
@@ -1103,8 +1175,6 @@
                      description="Enable Rust cfg attributes support"/>
         <registryKey key="org.rust.lang.highlight.macro.body" defaultValue="true" restartRequired="false"
                      description="Highlight Rust macro call bodies"/>
-        <registryKey key="org.rust.lang.macros.persistentCache" defaultValue="true" restartRequired="false"
-                     description="Use persistent cache for Rust macro expansions"/>
         <registryKey key="org.rust.cargo.lock.update.delay.threshold" defaultValue="5000" restartRequired="false"
                      description="Delay in ms between Cargo metadata call and changes in Cargo.lock
                      when automatic project structure reload doesn't occur"/>
@@ -1116,6 +1186,14 @@
                      Run Tool Window instead of raw console"/>
         <registryKey key="org.rust.macros.proc.timeout" defaultValue="5000" restartRequired="false"
                      description="The maximum time (in milliseconds) allotted to one procedural macro expansion"/>
+        <registryKey key="org.rust.resolve.new.engine" defaultValue="true" restartRequired="true"
+                     description="Enables new name resolution engine"/>
+        <registryKey key="org.rust.resolve.new.engine.macros.parallel" defaultValue="true" restartRequired="false"
+                     description="Expand macros in parallel"/>
+        <registryKey key="org.rust.external.linter.max.duration" defaultValue="3000" restartRequired="false"
+                     description="Show notification warning if the external linter is running longer than the set value (ms)"/>
+        <registryKey key="org.rust.debugger.lldb.rust.msvc" defaultValue="false" restartRequired="false"
+                     description="Enable Rust MSVC support in LLDB (Windows-only)"/>
 
         <!-- Move refactoring -->
 
@@ -1134,13 +1212,29 @@
         <console.folding implementation="org.rust.ide.console.RsConsoleFolding"/>
 
         <!--  Experimental features -->
-        <experimentalFeature id="org.rust.wsl" percentOfUsers="0">
+        <experimentalFeature id="org.rust.wsl" percentOfUsers="100">
             <description>Enables WSL toolchains</description>
         </experimentalFeature>
         <experimentalFeature id="org.rust.cargo.features.settings.gutter" percentOfUsers="0">
             <description>Show settings gutter icon near [features] section in `Cargo.toml` where you can enable or disable all features</description>
         </experimentalFeature>
 
+        <advancedSetting
+            id="org.rust.convert.json.to.struct"
+            enumClass="org.rust.ide.typing.paste.StoredPreference"
+            default="ASK_EVERY_TIME"
+            groupKey="advanced.setting.rust.group"
+        />
+        <advancedSetting
+            id="org.rust.external.doc.url"
+            default="https://docs.rs/"
+            groupKey="advanced.setting.rust.group"
+        />
+        <advancedSetting
+            id="org.rust.macros.maximum.recursion.limit"
+            default="1000"
+            groupKey="advanced.setting.rust.group"
+        />
     </extensions>
 
     <extensions defaultExtensionNs="org.rust">
@@ -1186,6 +1280,8 @@
     </extensionPoints>
 
     <applicationListeners>
+        <listener class="org.rust.ide.security.RsTrustStateListener"
+                  topic="com.intellij.ide.impl.TrustStateListener"/>
         <listener class="org.rust.ide.navigation.goto.RsGoToDeclarationRunningService$Listener"
                   topic="com.intellij.openapi.actionSystem.ex.AnActionListener" />
         <listener class="org.rust.ide.dynamic.RsDynamicPluginListener"
@@ -1195,8 +1291,8 @@
     <projectListeners>
         <listener class="org.rust.lang.core.macros.MacroExpansionManagerWaker"
                   topic="org.rust.cargo.project.model.CargoProjectsService$CargoProjectsListener" />
-        <listener class="org.rust.ide.security.RsTrustChangeNotifier"
-                  topic="com.intellij.ide.impl.TrustChangeNotifier"/>
+        <listener class="org.rust.ide.status.RsExternalLinterWidgetUpdater"
+                  topic="org.rust.cargo.project.model.CargoProjectsService$CargoProjectsListener"/>
     </projectListeners>
 
     <actions>
@@ -1242,6 +1338,16 @@
         <action id="Rust.RsExtractEnumVariant"
                 class="org.rust.ide.refactoring.extractEnumVariant.RsExtractEnumVariantAction">
             <add-to-group group-id="IntroduceActionsGroup" anchor="after" relative-to-action="ExtractMethod"/>
+        </action>
+
+        <action id="Rust.RsExtractStructFields"
+                class="org.rust.ide.refactoring.extractStructFields.RsExtractStructFieldsAction">
+            <add-to-group group-id="IntroduceActionsGroup" anchor="after" relative-to-action="Rust.RsExtractEnumVariant"/>
+        </action>
+
+        <action id="Rust.RsExtractTrait"
+                class="org.rust.ide.refactoring.extractTrait.RsExtractTraitAction">
+            <add-to-group group-id="IntroduceActionsGroup" anchor="before" relative-to-action="ExtractInterface"/>
         </action>
 
         <action id="Rust.ShowSingleStepMacroExpansionAction"

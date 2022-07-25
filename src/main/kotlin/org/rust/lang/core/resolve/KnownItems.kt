@@ -10,6 +10,7 @@ import com.intellij.openapi.util.Key
 import com.intellij.psi.util.CachedValue
 import com.intellij.psi.util.CachedValueProvider
 import com.intellij.psi.util.CachedValuesManager
+import com.intellij.util.ThreeState
 import org.rust.cargo.project.model.CargoProject
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.util.AutoInjectedCrates.CORE
@@ -51,8 +52,8 @@ class KnownItems(
     fun findLangItemRaw(langAttribute: String, crateName: String) =
         lookup.findLangItem(langAttribute, crateName)
 
-    fun findItemRaw(path: String): RsNamedElement? =
-        lookup.findItem(path)
+    fun findItemRaw(path: String, isStd: Boolean): RsNamedElement? =
+        lookup.findItem(path, isStd)
 
     /**
      * Find some known item by its "lang" attribute
@@ -66,8 +67,8 @@ class KnownItems(
         crateName: String = CORE
     ): T? = findLangItemRaw(langAttribute, crateName) as? T
 
-    inline fun <reified T : RsNamedElement> findItem(path: String): T? =
-        findItemRaw(path) as? T
+    inline fun <reified T : RsNamedElement> findItem(path: String, isStd: Boolean = true): T? =
+        findItemRaw(path, isStd) as? T
 
     val Vec: RsStructOrEnumItemElement? get() = findItem("alloc::vec::Vec")
     val String: RsStructOrEnumItemElement? get() = findItem("alloc::string::String")
@@ -97,9 +98,10 @@ class KnownItems(
     val Display: RsTraitItem? get() = findItem("core::fmt::Display")
     val ToOwned: RsTraitItem? get() = findItem("alloc::borrow::ToOwned")
     val ToString: RsTraitItem? get() = findItem("alloc::string::ToString")
-    val Try: RsTraitItem? get() = findItem("core::ops::try::Try")
+    val Try: RsTraitItem? get() = findItem("core::ops::try_trait::Try") ?: findItem("core::ops::try::Try")
     val Generator: RsTraitItem? get() = findItem("core::ops::generator::Generator")
     val Future: RsTraitItem? get() = findItem("core::future::future::Future")
+    val IntoFuture: RsTraitItem? get() = findItem("core::future::into_future::IntoFuture")
     val Octal: RsTraitItem? get() = findItem("core::fmt::Octal")
     val LowerHex: RsTraitItem? get() = findItem("core::fmt::LowerHex")
     val UpperHex: RsTraitItem? get() = findItem("core::fmt::UpperHex")
@@ -114,10 +116,13 @@ class KnownItems(
     val Drop: RsTraitItem? get() = findLangItem("drop")
     val Sized: RsTraitItem? get() = findLangItem("sized")
     val Unsize: RsTraitItem? get() = findLangItem("unsize")
+    val CoerceUnsized: RsTraitItem? get() = findLangItem("coerce_unsized")
+    val Destruct: RsTraitItem? get() = findLangItem("destruct")
     val Fn: RsTraitItem? get() = findLangItem("fn")
     val FnMut: RsTraitItem? get() = findLangItem("fn_mut")
     val FnOnce: RsTraitItem? get() = findLangItem("fn_once")
     val Index: RsTraitItem? get() = findLangItem("index")
+    val IndexMut: RsTraitItem? get() = findLangItem("index_mut")
     val Clone: RsTraitItem? get() = findLangItem("clone")
     val Copy: RsTraitItem? get() = findLangItem("copy")
     val PartialEq: RsTraitItem? get() = findLangItem("eq")
@@ -144,12 +149,12 @@ class KnownItems(
 
 interface KnownItemsLookup {
     fun findLangItem(langAttribute: String, crateName: String): RsNamedElement?
-    fun findItem(path: String): RsNamedElement?
+    fun findItem(path: String, isStd: Boolean): RsNamedElement?
 }
 
 private object DummyKnownItemsLookup : KnownItemsLookup {
     override fun findLangItem(langAttribute: String, crateName: String): RsNamedElement? = null
-    override fun findItem(path: String): RsNamedElement? = null
+    override fun findItem(path: String, isStd: Boolean): RsNamedElement? = null
 }
 
 private class RealKnownItemsLookup(
@@ -166,9 +171,9 @@ private class RealKnownItemsLookup(
         }.orElse(null)
     }
 
-    override fun findItem(path: String): RsNamedElement? {
+    override fun findItem(path: String, isStd: Boolean): RsNamedElement? {
         return resolvedItems.getOrPut(path) {
-            Optional.ofNullable(resolveStringPath(path, workspace, project)?.first)
+            Optional.ofNullable(resolveStringPath(path, workspace, project, ThreeState.fromBoolean(isStd))?.first)
         }.orElse(null)
     }
 }
@@ -188,20 +193,19 @@ enum class KnownDerivableTrait(
     PartialOrd(KnownItems::PartialOrd, arrayOf(PartialEq)),
     Ord(KnownItems::Ord, arrayOf(PartialOrd, Eq, PartialEq)),
 
-    Serialize({ it.findItem("serde::Serialize") }, isStd = false),
-    Deserialize({ it.findItem("serde::Deserialize") }, isStd = false),
+    Serialize({ it.findItem("serde::Serialize", isStd = false) }, isStd = false),
+    Deserialize({ it.findItem("serde::Deserialize", isStd = false) }, isStd = false),
 
     // TODO Fail also derives `Display`. Ignore it for now
-    Fail({ it.findItem("failure::Fail") }, arrayOf(Debug), isStd = false),
+    Fail({ it.findItem("failure::Fail", isStd = false) }, arrayOf(Debug), isStd = false),
     ;
 
     fun findTrait(items: KnownItems): RsTraitItem? = resolver(items)
 
     /** Hardcoded trait impl vs proc macro expansion usage */
     fun shouldUseHardcodedTraitDerive(): Boolean {
-        // Use hardcoded impls for all known derives except `failure::Fail` (if proc macro expansion
-        // is enabled). We always hardcode `serde` due to performance reasons
-        return this != Fail || !ProcMacroApplicationService.isEnabled()
+        // We don't use hardcoded impls for non-std derives if proc macro expansion is enabled
+        return isStd || !ProcMacroApplicationService.isEnabled()
     }
 
     companion object {

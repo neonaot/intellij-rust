@@ -24,9 +24,7 @@ import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.ImplLookup
 import org.rust.lang.core.resolve.KnownItems
 import org.rust.lang.core.resolve.knownItems
-import org.rust.lang.core.types.infer.RsInferenceResult
-import org.rust.lang.core.types.infer.inferTypeReferenceType
-import org.rust.lang.core.types.infer.inferTypesIn
+import org.rust.lang.core.types.infer.*
 import org.rust.lang.core.types.regions.getRegionScopeTree
 import org.rust.lang.core.types.ty.Ty
 import org.rust.lang.core.types.ty.TyTypeParameter
@@ -92,7 +90,19 @@ val RsPatField.type: Ty
 val RsExpr.type: Ty
     get() = inference?.getExprType(this) ?: TyUnknown
 
+val RsStructLiteralField.type: Ty
+    get() = (if (isShorthand) resolveToBinding()?.type else expr?.type) ?: TyUnknown
+
+val RsExpr.adjustments: List<Adjustment>
+    get() = inference?.getExprAdjustments(this) ?: emptyList()
+
+val RsStructLiteralField.adjustments: List<Adjustment>
+    get() = inference?.getExprAdjustments(this) ?: emptyList()
+
 val RsExpr.expectedType: Ty?
+    get() = expectedTypeCoercable?.ty
+
+val RsExpr.expectedTypeCoercable: ExpectedType?
     get() = inference?.getExpectedExprType(this)
 
 val RsExpr.declaration: RsElement?
@@ -100,7 +110,7 @@ val RsExpr.declaration: RsElement?
         is RsPathExpr -> path.reference?.resolve()
         is RsDotExpr -> expr.declaration
         is RsCallExpr -> expr.declaration
-        is RsIndexExpr -> containerExpr?.declaration
+        is RsIndexExpr -> containerExpr.declaration
         is RsStructLiteral -> path.reference?.resolve()
         else -> null
     }

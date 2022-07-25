@@ -42,3 +42,14 @@ struct S<F>
 struct EmptyWhere where {}
 
 fn bar() -> foo!() { let a: foo!() = 0 as foo!(); a }
+
+type ExternFn = extern fn();
+type ExternCFn = extern "C" fn();
+type ExternFnWithEscapeInAbi = extern "R\x75st" fn();
+type ExternFnWithRawAbi = extern r"system" fn();
+type ExternFnWithInvalidAbi = extern true fn();
+
+type GatSimple<T> = ();
+type GatBound<T>: Bound = ();
+type GatWhere<T> where T: Bound = ();
+type GatBoundWhere<T>: Bound where T: Bound = ();

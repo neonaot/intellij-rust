@@ -5,13 +5,13 @@
 
 package org.rust.ide.annotator
 
-import com.intellij.ide.annotator.AnnotatorBase
+import com.intellij.codeInspection.util.InspectionMessage
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.util.TextRange
-import com.intellij.openapiext.isUnitTestMode
 import com.intellij.psi.PsiElement
 import org.intellij.lang.annotations.Language
+import org.rust.cargo.project.workspace.CargoWorkspace.Edition
 import org.rust.cargo.project.workspace.PackageOrigin
 import org.rust.ide.colors.RsColor
 import org.rust.ide.injected.isDoctestInjection
@@ -21,6 +21,7 @@ import org.rust.lang.core.FeatureAvailability
 import org.rust.lang.core.macros.MacroExpansionMode
 import org.rust.lang.core.macros.macroExpansionManager
 import org.rust.lang.core.psi.*
+import org.rust.lang.core.psi.ext.existsAfterExpansion
 import org.rust.lang.core.psi.ext.startOffset
 import org.rust.lang.core.psi.ext.withSubst
 import org.rust.lang.core.resolve.KnownItems
@@ -34,10 +35,12 @@ import org.rust.lang.core.types.ty.TyUnknown
 import org.rust.lang.core.types.ty.stripReferences
 import org.rust.lang.core.types.type
 import org.rust.lang.utils.parseRustStringCharacters
+import org.rust.openapiext.isUnitTestMode
 
 class RsFormatMacroAnnotator : AnnotatorBase() {
     override fun annotateInternal(element: PsiElement, holder: AnnotationHolder) {
         val formatMacro = element as? RsMacroCall ?: return
+        if (!formatMacro.existsAfterExpansion) return
 
         val (macroPos, macroArgs) = getFormatMacroCtx(formatMacro) ?: return
 
@@ -157,8 +160,6 @@ private data class FormatContext(
     }.toSet()
 
     val namedArguments: Map<String, RsFormatMacroArg> = arguments.mapNotNull { it.name()?.to(it) }.toMap()
-
-    val knownItems: KnownItems = macro.knownItems
 }
 
 private data class ParsedParameter(
@@ -175,7 +176,11 @@ private class ParseContext(val sourceMap: IntArray, val offset: Int, val paramet
             .shiftRight(offset)
 }
 
-private data class ErrorAnnotation(val range: TextRange, val error: String, val isTraitError: Boolean = false)
+private data class ErrorAnnotation(
+    val range: TextRange,
+    @InspectionMessage val error: String,
+    val isTraitError: Boolean = false
+)
 
 private val formatParser = Regex("""\{\{|}}|(\{([^}]*)}?)|(})""")
 
@@ -514,8 +519,12 @@ private fun getFormatMacroCtx(formatMacro: RsMacroCall): Pair<Int, List<RsFormat
         "format",
         "format_args",
         "format_args_nl" -> 0
-        // panic macro handle any literal (even with `{}`) if it's single argument
-        "panic" -> if (formatMacroArgs.size < 2) null else 0
+        // panic macro handles any literal (even with `{}`) if it's single argument in 2015 and 2018 editions,
+        // but starting with edition 2021 the first string literal is always format string
+        "panic" -> {
+            val edition = formatMacro.containingCrate?.edition ?: Edition.DEFAULT
+            if (formatMacroArgs.size < 2 && edition < Edition.EDITION_2021) null else 0
+        }
         "write",
         "writeln" -> 1
         else -> null

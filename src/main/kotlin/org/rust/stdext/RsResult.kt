@@ -31,6 +31,15 @@ sealed class RsResult<out T, out E> {
         is Ok -> Ok(ok)
         is Err -> Err(mapper(err))
     }
+
+    fun unwrap(): T = when (this) {
+        is Ok -> ok
+        is Err -> if (err is Throwable) {
+            throw IllegalStateException("called `RsResult.unwrap()` on an `Err` value", err)
+        } else {
+            throw IllegalStateException("called `RsResult.unwrap()` on an `Err` value: $err")
+        }
+    }
 }
 
 inline fun <T, E, U> RsResult<T, E>.andThen(action: (T) -> RsResult<U, E>): RsResult<U, E> = when (this) {
@@ -38,9 +47,19 @@ inline fun <T, E, U> RsResult<T, E>.andThen(action: (T) -> RsResult<U, E>): RsRe
     is RsResult.Err -> RsResult.Err(err)
 }
 
+inline fun <T, E, F> RsResult<T, E>.orElse(op: (E) -> RsResult<T, F>): RsResult<T, F> = when (this) {
+    is RsResult.Ok -> RsResult.Ok(ok)
+    is RsResult.Err -> op(err)
+}
+
 inline fun <T, E> RsResult<T, E>.unwrapOrElse(op: (E) -> T): T = when (this) {
     is RsResult.Ok -> ok
     is RsResult.Err -> op(err)
+}
+
+fun <T, E: Throwable> RsResult<T, E>.unwrapOrThrow(): T = when (this) {
+    is RsResult.Ok -> ok
+    is RsResult.Err -> throw err
 }
 
 fun <T : Any> T?.toResult(): RsResult<T, Unit> = if (this != null) RsResult.Ok(this) else RsResult.Err(Unit)

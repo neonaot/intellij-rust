@@ -17,6 +17,7 @@ import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.PsiUtilCore
 import com.intellij.psi.util.descendantsOfType
+import com.intellij.psi.util.prevLeaf
 import com.intellij.util.SmartList
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.lang.core.psi.*
@@ -76,6 +77,9 @@ val PsiElement.childrenWithLeaves: Sequence<PsiElement>
  * Extracts node's element type
  */
 val PsiElement.elementType: IElementType
+    get() = elementTypeOrNull!!
+
+val PsiElement.elementTypeOrNull: IElementType?
     // XXX: be careful not to switch to AST
     get() = if (this is RsFile) RsFileStub.Type else PsiUtilCore.getElementType(this)
 
@@ -278,7 +282,7 @@ fun PsiElement.rangeWithPrevSpace(prev: PsiElement?): TextRange =
     }
 
 val PsiElement.rangeWithPrevSpace: TextRange
-    get() = rangeWithPrevSpace(prevSibling)
+    get() = rangeWithPrevSpace(prevLeaf())
 
 private fun PsiElement.getLineCount(): Int {
     val doc = containingFile?.document
@@ -303,7 +307,7 @@ inline val <T : StubElement<*>> StubBasedPsiElement<T>.greenStub: T?
     get() = (this as? StubBasedPsiElementBase<T>)?.greenStub
 
 fun PsiElement.isKeywordLike(): Boolean {
-    return when (elementType) {
+    return when (elementTypeOrNull) {
         in RS_KEYWORDS,
         RsElementTypes.BOOL_LITERAL -> true
         RsElementTypes.IDENTIFIER -> {

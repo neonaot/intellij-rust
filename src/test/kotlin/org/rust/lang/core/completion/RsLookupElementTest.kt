@@ -12,6 +12,7 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.intellij.patterns.ElementPattern
 import com.intellij.psi.NavigatablePsiElement
+import com.intellij.util.containers.MultiMap
 import org.intellij.lang.annotations.Language
 import org.rust.RsTestBase
 import org.rust.lang.core.psi.RsFile
@@ -121,6 +122,11 @@ class RsLookupElementTest : RsTestBase() {
     fun `test macro definition`() = check("""
         macro_rules! test { () => () }
                      //^
+    """, tailText = "!", typeText = null)
+
+    fun `test macro 2 definition`() = check("""
+        macro test() {}
+              //^
     """, tailText = "!", typeText = null)
 
     fun `test deprecated fn`() = check("""
@@ -336,7 +342,6 @@ class RsLookupElementTest : RsTestBase() {
         InlineFile(code)
         val element = findElementInEditor<RsReferenceElement>()
         val context = RsCompletionContext(element)
-        val processedPathNames = mutableSetOf<String>()
 
         val lookups = mutableListOf<LookupElement>()
         val result = object : CompletionResultSet(PrefixMatcher.ALWAYS_TRUE, null, null) {
@@ -352,7 +357,7 @@ class RsLookupElementTest : RsTestBase() {
             }
         }
 
-        RsCommonCompletionProvider.addCompletionVariants(element, result, context, processedPathNames)
+        RsCommonCompletionProvider.addCompletionVariants(element, result, context, MultiMap())
         if (element is RsMethodOrField) {
             RsCommonCompletionProvider.addMethodAndFieldCompletion(element, result, context)
         }

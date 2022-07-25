@@ -7,6 +7,7 @@ package org.rust.ide.refactoring
 
 import com.intellij.openapi.editor.ex.EditorSettingsExternalizable
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.NlsContexts.ListItem
 import com.intellij.psi.PsiElement
 import com.intellij.refactoring.RefactoringBundle
 import com.intellij.refactoring.inline.InlineOptionsWithSearchSettingsDialog
@@ -19,27 +20,18 @@ abstract class RsInlineDialog(
     element: RsNameIdentifierOwner,
     private val refElement: RsReference?,
     project: Project,
-    private val occurrencesNumber: Int
 ) : InlineOptionsWithSearchSettingsDialog(project, true, element) {
     private var searchInCommentsAndStrings = true
     private var searchInTextOccurrences = true
 
-    abstract fun getLabelText(occurrences: String): String
-
     fun shouldBeShown() = EditorSettingsExternalizable.getInstance().isShowInlineLocalDialog
 
-    override fun getNameLabelText(): String {
-        val occurrencesString =
-            if (occurrencesNumber < 0) {
-                ""
-            } else {
-                buildString {
-                    append("has $occurrencesNumber occurrence")
-                    if (occurrencesNumber != 1) append("s")
-                }
-            }
-        return getLabelText(occurrencesString)
-    }
+    protected fun getOccurrencesText(occurrences: Int): String =
+        when {
+            occurrences < 0 -> ""
+            occurrences == 1 -> "has 1 occurrence"
+            else -> "has $occurrences occurrences"
+        }
 
     override fun isInlineThis(): Boolean = false
 
@@ -62,7 +54,7 @@ abstract class RsInlineDialog(
         myInvokedOnReference = refElement != null
 
         setPreviewResults(true)
-        setDoNotAskOption(object : DoNotAskOption {
+        setDoNotAskOption(object : com.intellij.openapi.ui.DoNotAskOption {
             override fun isToBeShown() = EditorSettingsExternalizable.getInstance().isShowInlineLocalDialog
             override fun setToBeShown(value: Boolean, exitCode: Int) {
                 EditorSettingsExternalizable.getInstance().isShowInlineLocalDialog = value
@@ -76,7 +68,10 @@ abstract class RsInlineDialog(
     }
 }
 
-class RsInlineUsageViewDescriptor(val element: PsiElement, val header: String) : UsageViewDescriptor {
+class RsInlineUsageViewDescriptor(
+    val element: PsiElement,
+    @Suppress("UnstableApiUsage") @ListItem val header: String
+) : UsageViewDescriptor {
     override fun getCommentReferencesText(usagesCount: Int, filesCount: Int) =
         RefactoringBundle.message("comments.elements.header",
             UsageViewBundle.getOccurencesString(usagesCount, filesCount))

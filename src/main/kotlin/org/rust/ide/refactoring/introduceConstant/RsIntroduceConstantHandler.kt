@@ -18,13 +18,33 @@ import com.intellij.refactoring.util.CommonRefactoringUtil
 import org.rust.ide.refactoring.*
 import org.rust.ide.utils.import.RsImportHelper
 import org.rust.lang.core.psi.*
+import org.rust.lang.core.psi.ext.RsElement
+import org.rust.lang.core.psi.ext.getAllVisibleBindings
+import org.rust.lang.core.psi.ext.getLocalVariableVisibleBindings
+import org.rust.lang.core.psi.ext.isConst
+import org.rust.openapiext.nonBlocking
 import org.rust.openapiext.runWriteCommandAction
 
 class RsIntroduceConstantHandler : RefactoringActionHandler {
     override fun invoke(project: Project, editor: Editor, file: PsiFile, dataContext: DataContext) {
         if (file !is RsFile) return
-        val exprs = findCandidateExpressionsToExtract(editor, file).filter { it.isExtractable() }
+        val exprs = findCandidateExpressionsToExtract(editor, file)
 
+        // isExtractable uses resolve, so we must not call it from EDT
+        project.nonBlocking({
+            exprs.filter { it.isExtractable() }
+        }) {
+            if (!editor.isDisposed) {
+                handleExpressions(project, editor, it)
+            }
+        }
+    }
+
+    override fun invoke(project: Project, elements: Array<out PsiElement>, dataContext: DataContext?) {
+        //this doesn't get called from the editor.
+    }
+
+    private fun handleExpressions(project: Project, editor: Editor, exprs: List<RsExpr>) {
         when (exprs.size) {
             0 -> {
                 val message = RefactoringBundle.message(if (editor.selectionModel.hasSelection())
@@ -44,28 +64,46 @@ class RsIntroduceConstantHandler : RefactoringActionHandler {
             }
         }
     }
-
-    override fun invoke(project: Project, elements: Array<out PsiElement>, dataContext: DataContext?) {
-        //this doesn't get called from the editor.
-    }
 }
 
 private fun RsExpr.isExtractable(): Boolean {
     return when (this) {
         is RsLitExpr -> true
         is RsBinaryExpr -> this.left.isExtractable() && (this.right?.isExtractable() ?: true)
+        is RsPathExpr -> {
+            val target = path.reference?.resolve() as? RsConstant
+            target?.isConst == true
+        }
         else -> false
     }
 }
 
-private fun replaceWithConstant(expr: RsExpr, occurrences: List<RsExpr>, candidate: InsertionCandidate, editor: Editor) {
+// This cannot be called from EDT, because it uses resolve
+private fun findExistingBindings(candidate: InsertionCandidate, occurrences: List<RsExpr>): Set<String> {
+    val owner = candidate.parent
+    return (owner.children.first() as? RsElement)?.getAllVisibleBindings().orEmpty() +
+        occurrences.flatMap { it.getLocalVariableVisibleBindings().keys }
+}
+
+private fun replaceWithConstant(
+    expr: RsExpr,
+    occurrences: List<RsExpr>,
+    candidate: InsertionCandidate,
+    existingBindings: Set<String>,
+    editor: Editor,
+) {
     val project = expr.project
     val factory = RsPsiFactory(project)
     val suggestedNames = expr.suggestedNames()
-    val name = suggestedNames.default.toUpperCase()
+
+    val name = suggestedNames.all.map { it.toUpperCase() }.firstOrNull { it !in existingBindings }
+        ?: freshenName(suggestedNames.default.toUpperCase(), existingBindings)
+
     val const = factory.createConstant(name, expr)
 
     project.runWriteCommandAction {
+        // BACKCOMPAT: 2022.1
+        @Suppress("DEPRECATION", "UnstableApiUsage")
         val newline = PsiParserFacade.SERVICE.getInstance(project).createWhiteSpaceFromText("\n")
         val context = candidate.parent
         val insertedConstant = context.addBefore(const, candidate.anchor) as RsConstant
@@ -74,7 +112,7 @@ private fun replaceWithConstant(expr: RsExpr, occurrences: List<RsExpr>, candida
             val created = factory.createExpression(name)
             val element = it.replace(created) as RsPathExpr
             if (element.path.reference?.resolve() == null) {
-                RsImportHelper.importElements(element, setOf(insertedConstant))
+                RsImportHelper.importElement(element, insertedConstant)
             }
             element
         }
@@ -84,7 +122,7 @@ private fun replaceWithConstant(expr: RsExpr, occurrences: List<RsExpr>, candida
 
         PsiDocumentManager.getInstance(project).doPostponedOperationsAndUnblockDocument(editor.document)
         RsInPlaceVariableIntroducer(insertedConstant, editor, project, "Choose a constant name", replaced)
-            .performInplaceRefactoring(LinkedHashSet(suggestedNames.all.map { it.toUpperCase() }))
+            .performInplaceRefactoring(linkedSetOf(name))
     }
 }
 
@@ -92,8 +130,13 @@ private fun extractExpression(editor: Editor, expr: RsExpr) {
     if (!expr.isValid) return
     val occurrences = findOccurrences(expr)
     showOccurrencesChooser(editor, expr, occurrences) { occurrencesToReplace ->
-        showInsertionChooser(editor, expr) {
-            replaceWithConstant(expr, occurrencesToReplace, it, editor)
+        showInsertionChooser(editor, expr) { candidate ->
+            val project = editor.project ?: return@showInsertionChooser
+            project.nonBlocking({
+                findExistingBindings(candidate, occurrences)
+            }) { bindings ->
+                replaceWithConstant(expr, occurrencesToReplace, candidate, bindings, editor)
+            }
         }
     }
 }

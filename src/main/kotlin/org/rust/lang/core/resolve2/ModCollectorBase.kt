@@ -5,10 +5,12 @@
 
 package org.rust.lang.core.resolve2
 
+import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.stubs.StubElement
 import com.intellij.util.io.IOUtil
 import org.rust.lang.core.crate.Crate
+import org.rust.lang.core.macros.MacroCallBody
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.*
 import org.rust.lang.core.resolve.Namespace
@@ -47,15 +49,41 @@ class ModCollectorBase private constructor(
         var macroIndexInParent = 0
         for (item in items) {
             if (item !is RsExternCrateItemStub) {
-                collectElement(item, macroIndexInParent)
-                if (item.hasMacroIndex()) {
-                    ++macroIndexInParent
-                }
+                macroIndexInParent += collectElement(item, macroIndexInParent)
             }
         }
     }
 
-    private fun collectElement(element: StubElement<out PsiElement>, macroIndexInParent: Int) {
+    private fun collectElement(element: StubElement<out PsiElement>, macroIndexInParent: Int): Int {
+        var customDerives = emptyList<RsMetaItemStub>()
+        if (element is RsAttrProcMacroOwnerStub) {
+            // TODO store CustomAttributes in defMap, pass it to getProcMacroAttributeRaw
+            when (val attr = ProcMacroAttribute.getProcMacroAttributeWithoutResolve(element, element, crate, withDerives = true)) {
+                is ProcMacroAttribute.Attr -> {
+                    collectAttrProcMacroCall(element, attr, macroIndexInParent)
+                    return 1
+                }
+                is ProcMacroAttribute.Derive -> if (element.mayHaveCustomDerive) {
+                    customDerives = attr.derives.toList()
+                }
+                ProcMacroAttribute.None -> Unit
+            }
+        }
+
+        collectElementWithoutAttrMacros(element, macroIndexInParent)
+
+        customDerives.forEachIndexed { i, customDerive ->
+            collectCustomDeriveProcMacroCall(
+                element as RsAttrProcMacroOwnerStub,
+                customDerive,
+                MacroIndex(intArrayOf(macroIndexInParent, i))
+            )
+        }
+
+        return if (element.hasMacroIndexIgnoringProcMacros() || customDerives.isNotEmpty()) 1 else 0
+    }
+
+    private fun collectElementWithoutAttrMacros(element: StubElement<out PsiElement>, macroIndexInParent: Int) {
         when (element) {
             // impls are not named elements, so we don't need them for name resolution
             is RsImplItemStub -> Unit
@@ -173,7 +201,7 @@ class ModCollectorBase private constructor(
         val isCallDeeplyEnabledByCfg = isDeeplyEnabledByCfg && call.isEnabledByCfgSelf(crate)
         if (!isCallDeeplyEnabledByCfg) return
         val body = call.getIncludeMacroArgument(crate) ?: call.macroBody ?: return
-        val path = call.getPathWithAdjustedDollarCrate() ?: return
+        val path = call.path.getPathWithAdjustedDollarCrate() ?: return
         val bodyTextRange = call.bodyTextRange
         val callLight = MacroCallLight(
             path,
@@ -185,6 +213,65 @@ class ModCollectorBase private constructor(
             bodyEndOffsetInExpansion = bodyTextRange?.endOffset ?: -1
         )
         visitor.collectMacroCall(callLight, call)
+    }
+
+    private fun collectAttrProcMacroCall(
+        item: RsAttrProcMacroOwnerStub,
+        attr: ProcMacroAttribute.Attr<RsMetaItemStub>,
+        macroIndexInParent: Int
+    ) {
+        val isCallDeeplyEnabledByCfg = isDeeplyEnabledByCfg && item.isEnabledByCfgSelf(crate)
+        if (!isCallDeeplyEnabledByCfg) return
+        val rawBody = item.stubbedText ?: return
+        val attrPath = attr.attr.path ?: return
+        val attrPathSegments = attrPath.getPathWithAdjustedDollarCrate() ?: return
+
+        val originalItem = if (item is RsNamedStub && RsProcMacroPsiUtil.canFallBackAttrMacroToOriginalItem(item)) {
+            lowerSimpleItem(item)
+        } else {
+            null
+        }
+        val callLight = ProcMacroCallLight(
+            attrPathSegments,
+            rawBody,
+            item.stubbedTextHash,
+            item.endOfAttrsOffset,
+            attr.index,
+            MacroIndex(intArrayOf(macroIndexInParent)),
+            attrPathStartOffsetInExpansion = attrPath.startOffset,
+            bodyStartOffsetInExpansion = item.startOffset,
+            bodyEndOffsetInExpansion = item.startOffset + rawBody.length,
+            originalItem,
+            fixupRustSyntaxErrors = item is RsFunctionStub
+        )
+        visitor.collectProcMacroCall(callLight)
+    }
+
+    private fun collectCustomDeriveProcMacroCall(
+        item: RsAttrProcMacroOwnerStub,
+        customDeriveAttr: RsMetaItemStub,
+        macroIndexInParent: MacroIndex
+    ) {
+        val isCallDeeplyEnabledByCfg = isDeeplyEnabledByCfg && item.isEnabledByCfgSelf(crate)
+        if (!isCallDeeplyEnabledByCfg) return
+        val rawBody = item.stubbedText ?: return
+        val attrPath = customDeriveAttr.path ?: return
+        val attrPathSegments = attrPath.getPathWithAdjustedDollarCrate() ?: return
+
+        val callLight = ProcMacroCallLight(
+            attrPathSegments,
+            rawBody,
+            item.stubbedTextHash,
+            item.endOfAttrsOffset,
+            -1,
+            macroIndexInParent,
+            attrPathStartOffsetInExpansion = attrPath.startOffset,
+            bodyStartOffsetInExpansion = item.startOffset,
+            bodyEndOffsetInExpansion = item.startOffset + rawBody.length,
+            null,
+            fixupRustSyntaxErrors = false
+        )
+        visitor.collectProcMacroCall(callLight)
     }
 
     private fun collectMacroDef(def: RsMacroStub, macroIndexInParent: Int) {
@@ -242,7 +329,7 @@ class ModCollectorBase private constructor(
         get() = HAS_PRELUDE_IMPORT_PROP.getByStub(this, crate)
 
     companion object {
-        fun collectMod(mod: StubElement<out RsMod>, isDeeplyEnabledByCfg: Boolean, visitor: ModVisitor, crate: Crate) {
+        fun collectMod(mod: StubElement<out RsItemsOwner>, isDeeplyEnabledByCfg: Boolean, visitor: ModVisitor, crate: Crate) {
             val collector = ModCollectorBase(visitor, crate, isDeeplyEnabledByCfg)
             collector.collectElements(mod)
             collector.visitor.afterCollectMod()
@@ -255,6 +342,7 @@ interface ModVisitor {
     fun collectModOrEnumItem(item: ModOrEnumItemLight, stub: RsNamedStub)
     fun collectImport(import: ImportLight)
     fun collectMacroCall(call: MacroCallLight, stub: RsMacroCallStub)
+    fun collectProcMacroCall(call: ProcMacroCallLight)
     fun collectMacroDef(def: MacroDefLight)
     fun collectMacro2Def(def: Macro2DefLight)
     fun afterCollectMod() {}
@@ -282,6 +370,11 @@ class CompositeModVisitor(
     override fun collectMacroCall(call: MacroCallLight, stub: RsMacroCallStub) {
         visitor1.collectMacroCall(call, stub)
         visitor2.collectMacroCall(call, stub)
+    }
+
+    override fun collectProcMacroCall(call: ProcMacroCallLight) {
+        visitor1.collectProcMacroCall(call)
+        visitor2.collectProcMacroCall(call)
     }
 
     override fun collectMacroDef(def: MacroDefLight) {
@@ -471,6 +564,70 @@ class MacroCallLight(
     }
 }
 
+class ProcMacroCallLight(
+    val attrPath: Array<String>,
+    val body: String,
+    val bodyHash: HashCode?,
+    private val endOfAttrsOffset: Int,
+    private val attrIndex: Int,
+    /** See [MacroIndex] */
+    val macroIndexInParent: MacroIndex,
+    /**
+     * $crate::foo! { ... $crate ... }
+     *                               ^ [bodyEndOffsetInExpansion]
+     *              ^ [bodyStartOffsetInExpansion]
+     * ^ [attrPathStartOffsetInExpansion]
+     */
+    val attrPathStartOffsetInExpansion: Int,
+    val bodyStartOffsetInExpansion: Int,
+    val bodyEndOffsetInExpansion: Int,
+
+    val originalItem: SimpleItemLight?,
+    val fixupRustSyntaxErrors: Boolean,
+) : Writeable {
+
+    override fun writeTo(data: DataOutput) {
+        data.writePath(attrPath)
+        if (bodyHash != null) {
+            data.writeHashCodeNullable(bodyHash)
+        } else {
+            // Null `bodyHash` means that body contains `#[cfg_attr]`, hence the hash should be computed
+            // from the lowered body (`lowerBody`)
+            IOUtil.writeUTF(data, body)
+        }
+        data.writeVarInt(endOfAttrsOffset)
+        data.writeVarInt(attrIndex)
+        macroIndexInParent.writeTo(data)
+    }
+
+    fun lowerBody(project: Project, crate: Crate): MacroCallBodyWithHash? {
+        val body = if (attrIndex != -1) {
+            doPrepareAttributeProcMacroCallBody(
+                project,
+                body,
+                endOfAttrsOffset,
+                crate,
+                attrIndex,
+                fixupRustSyntaxErrors,
+            )
+        } else {
+            doPrepareCustomDeriveMacroCallBody(
+                project,
+                body,
+                endOfAttrsOffset,
+                crate
+            )
+        } ?: return null
+        val hash = bodyHash ?: body.bodyHash
+        return MacroCallBodyWithHash(body, hash)
+    }
+}
+
+data class MacroCallBodyWithHash(
+    val body: MacroCallBody,
+    val hash: HashCode,
+)
+
 data class MacroDefLight(
     val name: String,
     val body: String,
@@ -520,12 +677,43 @@ data class Macro2DefLight(
 private fun DataOutput.writePath(path: Array<String>) {
     for (segment in path) {
         IOUtil.writeUTF(this, segment)
-        writeChar(':'.toInt())
+        writeChar(':'.code)
     }
 }
 
-fun StubElement<*>.hasMacroIndex(): Boolean =
+private fun StubElement<*>.hasMacroIndexIgnoringProcMacros(): Boolean =
     this is RsMacroCallStub || this is RsMacroStub || this is RsModItemStub || this is RsModDeclItemStub
 
-fun PsiElement.hasMacroIndex(): Boolean =
+private fun PsiElement.hasMacroIndexIgnoringProcMacros(): Boolean =
     this is RsMacroCall || this is RsMacro || this is RsModItem || this is RsModDeclItem
+
+fun StubElement<*>.hasMacroIndex(crate: Crate): Boolean {
+    if (hasMacroIndexIgnoringProcMacros()) return true
+    if (this !is RsAttrProcMacroOwnerStub) return false
+    val attr = ProcMacroAttribute.getProcMacroAttributeWithoutResolve(
+        this,
+        this,
+        crate,
+        withDerives = true
+    )
+    return when (attr) {
+        ProcMacroAttribute.None -> false
+        is ProcMacroAttribute.Attr -> true
+        is ProcMacroAttribute.Derive -> attr.derives.any()
+    }
+}
+
+fun PsiElement.hasMacroIndex(crate: Crate): Boolean {
+    if (hasMacroIndexIgnoringProcMacros()) return true
+    if (this !is RsAttrProcMacroOwner) return false
+    val attr = ProcMacroAttribute.getProcMacroAttributeWithoutResolve(
+        this,
+        explicitCrate = crate,
+        withDerives = true
+    )
+    return when (attr) {
+        ProcMacroAttribute.None -> false
+        is ProcMacroAttribute.Attr -> true
+        is ProcMacroAttribute.Derive -> attr.derives.any()
+    }
+}

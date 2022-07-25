@@ -9,7 +9,6 @@ import com.intellij.application.options.CodeStyle
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.EmptyAction
 import com.intellij.openapi.actionSystem.IdeActions
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.codeStyle.CommonCodeStyleSettings
 import org.intellij.lang.annotations.Language
 import org.rust.RsTestBase
@@ -280,9 +279,8 @@ class RsCommenterTest : RsTestBase() {
         after: String,
         actionId: String,
         trimIndent: Boolean,
-        testmark: Testmark?
     ) {
-        super.checkEditorAction(before, after, actionId, trimIndent, testmark)
+        super.checkEditorAction(before, after, actionId, trimIndent)
         resetActionManagerState()
     }
 

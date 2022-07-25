@@ -5,8 +5,9 @@
 
 package org.rust.lang.core.resolve
 
-import org.rust.*
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.ExpandMacros
+import org.rust.ProjectDescriptor
+import org.rust.WithDependencyRustProjectDescriptor
 import org.rust.stdext.BothEditions
 
 @ExpandMacros
@@ -679,7 +680,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
                  //^ main.rs
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test mod declared with macro inside inline expanded mod`() = stubOnlyResolve("""
     //- main.rs
         macro_rules! gen_mod_decl_item {
@@ -699,7 +699,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
                  //X
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test mod with path attribute declared with macro`() = stubOnlyResolve("""
     //- main.rs
         macro_rules! foo {
@@ -882,7 +881,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
     """)
 
     // we only test that there are no exception with new resolve
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
     fun `test local_inner_macros expanded to extern crate`() = stubOnlyResolve("""
     //- main.rs
@@ -899,7 +897,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
         }
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test expand macro with incomplete path`() = stubOnlyResolve("""
     //- main.rs
         macro_rules! gen_func {
@@ -914,7 +911,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
         } //^ unresolved
     """)
 
-    @UseNewResolve
     fun `test legacy textual macro reexported as macro 2`() = checkByCode("""
         mod inner {
             #[macro_export]
@@ -932,7 +928,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
         } //^
     """)
 
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test macro call expanded to macro def and macro call 1`() = checkByCode("""
         macro_rules! as_is { ($($ t:tt)*) => { $($ t)* }; }
         as_is! {
@@ -944,7 +939,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
 
     // when resolving macro call expanded from other macro call,
     // firstly left sibling expanded elements should be processed
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test macro call expanded to macro def and macro call 2`() = checkByCode("""
         macro_rules! foo {
             (1) => {
@@ -966,8 +960,6 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
         } //^
     """)
 
-    @UseNewResolve
-    @MockEdition(CargoWorkspace.Edition.EDITION_2018)
     fun `test propagate expanded macro def to grandparent mod`() = checkByCode("""
         mod inner {
             #[macro_use]
@@ -986,5 +978,40 @@ class RsMacroExpansionResolveTest : RsResolveTestBase() {
             foo!();
             //^
         }
+    """)
+
+    fun `test recursion_limit (unresolved when recursion more then limit)`() = checkByCode("""
+        #![recursion_limit = "3"]
+
+        macro_rules! a {
+            (0) => { a!(1); };
+            (1) => { a!(2); };
+            (2) => { a!(3); };
+            (3) => { fn func() {} };
+        }
+        a!(0);
+
+        fn main() {
+            func();
+        } //^ unresolved
+    """)
+
+    fun `test recursion_limit (resolved when limit is more then default limit)`() = checkByCode("""
+        #![recursion_limit = "256"]
+
+        macro_rules! a {
+            ($ base:expr) => { use foo::func; };
+            ($ x:expr, $($ rest:expr),+) => { a!($($ rest),+); };
+        }
+
+        a! { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135 }
+
+        mod foo {
+            pub fn func() {}
+        }        //X
+
+        fn main() {
+            func();
+        } //^
     """)
 }

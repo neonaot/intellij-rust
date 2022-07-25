@@ -71,7 +71,9 @@ abstract class RsWithToolchainTestBase : CodeInsightFixtureTestCase<ModuleFixtur
             return
         }
 
-        super.runTestRunnable(testRunnable)
+        val testmark = collectTestmarksFromAnnotations()
+
+        testmark.checkHit { super.runTestRunnable(testRunnable) }
     }
 
     override fun setUp() {
@@ -81,6 +83,7 @@ abstract class RsWithToolchainTestBase : CodeInsightFixtureTestCase<ModuleFixtur
         if (disableMissedCacheAssertions) {
             RecursionManager.disableMissedCacheAssertions(testRootDisposable)
         }
+        setupExperimentalFeatures()
         setupResolveEngine(project, testRootDisposable)
         findAnnotationInstance<ExpandMacros>()?.let { ann ->
             Disposer.register(
@@ -91,8 +94,16 @@ abstract class RsWithToolchainTestBase : CodeInsightFixtureTestCase<ModuleFixtur
                 )
             )
         }
-        // RsExperiments.FETCH_ACTUAL_STDLIB_METADATA significantly slows down tests
+        // RsExperiments.FETCH_ACTUAL_STDLIB_METADATA significantly slows down tests.
+        // It's possible to make it cheap, we just need to wrap `Rustup.fetchStdlib()` call into
+        // `UnitTestRustcCache.cached()`
         setExperimentalFeatureEnabled(RsExperiments.FETCH_ACTUAL_STDLIB_METADATA, fetchActualStdlibMetadata, testRootDisposable)
+    }
+
+    private fun setupExperimentalFeatures() {
+        for (feature in findAnnotationInstance<WithExperimentalFeatures>()?.features.orEmpty()) {
+            setExperimentalFeatureEnabled(feature, true, testRootDisposable)
+        }
     }
 
     override fun tearDown() {
@@ -110,10 +121,6 @@ abstract class RsWithToolchainTestBase : CodeInsightFixtureTestCase<ModuleFixtur
 
     protected fun buildProject(builder: FileTreeBuilder.() -> Unit): TestProject =
         fileTree { builder() }.create()
-
-    /** Tries to find the specified annotation on the current test method and then on the current class */
-    private inline fun <reified T : Annotation> findAnnotationInstance(): T? =
-        javaClass.getMethod(name).getAnnotation(T::class.java) ?: javaClass.getAnnotation(T::class.java)
 
     /**
      * Tries to launches [action]. If it returns `false`, invokes [UIUtil.dispatchAllInvocationEvents] and tries again

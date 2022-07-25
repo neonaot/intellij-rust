@@ -5,14 +5,14 @@
 
 package org.rust.cargo.toolchain
 
-import com.intellij.util.text.SemVer.parseFromText
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import org.rust.cargo.toolchain.RustChannel.*
 import org.rust.cargo.toolchain.impl.RustcVersion
 import org.rust.cargo.toolchain.impl.parseRustcVersion
-import kotlin.test.assertEquals
+import org.rust.cargo.util.parseSemVer
 import java.time.LocalDate.parse as parseDate
 
 @RunWith(Parameterized::class)
@@ -37,9 +37,9 @@ class RustcVersionParsingTest(
                 commit-date: 2019-08-13
                 host: x86_64-apple-darwin
                 release: 1.37.0
-                LLVM version: 8.0    
+                LLVM version: 8.0
             """, RustcVersion(
-                parseFromText("1.37.0")!!,
+                "1.37.0".parseSemVer(),
                 "x86_64-apple-darwin",
                 STABLE,
                 "eae3437dfe991621e8afdc82734f4a172d7ddf9b",
@@ -52,9 +52,9 @@ class RustcVersionParsingTest(
                 commit-date: 2019-09-02
                 host: x86_64-unknown-linux-gnu
                 release: 1.39.0-nightly
-                LLVM version: 9.0     
+                LLVM version: 9.0
             """, RustcVersion(
-                parseFromText("1.39.0-nightly")!!,
+                "1.39.0-nightly".parseSemVer(),
                 "x86_64-unknown-linux-gnu",
                 NIGHTLY,
                 "9af17757be1cc3f672928ecf06c40a662c5ec26d",
@@ -67,9 +67,9 @@ class RustcVersionParsingTest(
                 commit-date: 2019-08-21
                 host: x86_64-apple-darwin
                 release: 1.38.0-beta.2
-                LLVM version: 9.0                
+                LLVM version: 9.0
             """, RustcVersion(
-                parseFromText("1.38.0-beta.2")!!,
+                "1.38.0-beta.2".parseSemVer(),
                 "x86_64-apple-darwin",
                 BETA,
                 "641586c1a54f1b1740f8dd796d7501e34c044da2",
@@ -82,9 +82,9 @@ class RustcVersionParsingTest(
                 commit-date: unknown
                 host: x86_64-unknown-linux-gnu
                 release: 1.37.0
-                LLVM version: 8.0                
+                LLVM version: 8.0
             """, RustcVersion(
-                parseFromText("1.37.0")!!,
+                "1.37.0".parseSemVer(),
                 "x86_64-unknown-linux-gnu",
                 STABLE,
                 null,

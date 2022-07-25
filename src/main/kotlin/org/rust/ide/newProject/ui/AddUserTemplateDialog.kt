@@ -6,48 +6,47 @@
 package org.rust.ide.newProject.ui
 
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.components.JBTextField
-import com.intellij.ui.layout.panel
+import com.intellij.ui.dsl.builder.panel
+import org.rust.RsBundle
 import org.rust.ide.newProject.state.RsUserTemplate
 import org.rust.ide.newProject.state.RsUserTemplatesState
-import java.awt.Dimension
+import org.rust.openapiext.addTextChangeListener
+import org.rust.openapiext.fullWidthCell
 import javax.swing.JComponent
 import javax.swing.event.DocumentEvent
 
 class AddUserTemplateDialog : DialogWrapper(null) {
     private val repoUrlField: JBTextField = JBTextField().apply {
-        preferredSize = Dimension(400, 0)
-        document.addDocumentListener(object : DocumentAdapter() {
-            override fun textChanged(event: DocumentEvent) = suggestName(event)
-        })
+        addTextChangeListener(::suggestName)
     }
 
     private val nameField: JBTextField = JBTextField()
 
     init {
-        title = "Add a Custom Template"
-        setOKButtonText("Add")
+        title = RsBundle.message("dialog.create.project.custom.add.template.title")
+        setOKButtonText(RsBundle.message("dialog.create.project.custom.add.template.action.add"))
         init()
     }
 
     override fun getPreferredFocusedComponent(): JComponent = repoUrlField
 
     override fun createCenterPanel(): JComponent = panel {
-        row("Template URL:") {
-            repoUrlField(comment = "A git repository URL to generate from")
+        row(RsBundle.message("dialog.create.project.custom.add.template.url")) {
+            fullWidthCell(repoUrlField)
+                .comment(RsBundle.message("dialog.create.project.custom.add.template.url.description"))
         }
-        row("Name:") {
-            nameField()
+        row(RsBundle.message("dialog.create.project.custom.add.template.name")) {
+            fullWidthCell(nameField)
         }
     }
 
     override fun doOKAction() {
         // TODO: Find a better way to handle dialog form validation
         if (nameField.text.isBlank()) return
-        if (RsUserTemplatesState.instance.templates.any { it.name == nameField.text }) return
+        if (RsUserTemplatesState.getInstance().templates.any { it.name == nameField.text }) return
 
-        RsUserTemplatesState.instance.templates.add(
+        RsUserTemplatesState.getInstance().templates.add(
             RsUserTemplate(nameField.text, repoUrlField.text)
         )
 

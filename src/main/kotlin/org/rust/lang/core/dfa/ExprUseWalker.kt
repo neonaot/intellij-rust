@@ -213,7 +213,7 @@ class ExprUseWalker(private val delegate: Delegate, private val mc: MemoryCatego
             }
 
             is RsIndexExpr -> {
-                expr.containerExpr?.let { selectFromExpr(it) }
+                selectFromExpr(expr.containerExpr)
                 expr.indexExpr?.let { consumeExpr(it) }
             }
 
@@ -375,7 +375,7 @@ class ExprUseWalker(private val delegate: Delegate, private val mc: MemoryCatego
     }
 
     private fun walkCondition(condition: RsCondition) {
-        val init = condition.expr
+        val init = condition.expr ?: return
         walkExpr(init)
         val initCmt = mc.processExpr(init)
         for (pat in condition.patList.orEmpty()) {
@@ -446,7 +446,10 @@ class ExprUseWalker(private val delegate: Delegate, private val mc: MemoryCatego
 
     private fun walkArm(discriminantCmt: Cmt, arm: RsMatchArm, mode: MatchMode) {
         arm.patList.forEach { walkPat(discriminantCmt, it, mode) }
-        arm.matchArmGuard?.let { consumeExpr(it.expr) }
+        val guard = arm.matchArmGuard
+        if (guard?.let == null) { // TODO: support `if let guard` syntax
+            guard?.expr?.let { consumeExpr(it) }
+        }
         arm.expr?.let { consumeExpr(it) }
     }
 

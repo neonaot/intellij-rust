@@ -7,7 +7,6 @@ package org.rust.lang.core.completion
 
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionResultSet
-import com.intellij.openapiext.Testmark
 import com.intellij.patterns.ElementPattern
 import com.intellij.patterns.PlatformPatterns.psiElement
 import com.intellij.psi.PsiElement
@@ -17,6 +16,7 @@ import org.rust.lang.core.macros.findExpansionElements
 import org.rust.lang.core.psi.RsElementTypes.MACRO_ARGUMENT
 import org.rust.lang.core.psi.ext.expansion
 import org.rust.lang.core.psi.ext.startOffset
+import org.rust.openapiext.Testmark
 
 /**
  * Provides completion inside a macro argument (e.g. `foo!(/*caret*/)`) if the macro IS expanded
@@ -32,7 +32,7 @@ object RsFullMacroArgumentCompletionProvider : RsCompletionProvider() {
         val position = parameters.position
         val dstElement = position.findExpansionElements()?.firstOrNull() ?: return
         val dstOffset = dstElement.startOffset + (parameters.offset - position.startOffset)
-        Testmarks.touched.hit()
+        Testmarks.Touched.hit()
         rerunCompletion(parameters.withPosition(dstElement, dstOffset), result)
     }
 
@@ -42,6 +42,6 @@ object RsFullMacroArgumentCompletionProvider : RsCompletionProvider() {
             .inside(psiElement(MACRO_ARGUMENT))
 
     object Testmarks {
-        val touched = Testmark("RsFullMacroArgumentCompletionProvider.touched")
+        object Touched : Testmark()
     }
 }

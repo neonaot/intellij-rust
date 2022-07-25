@@ -108,8 +108,8 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         type SizedMaybe<T> where T: Sized = Option<T>;
 
         <error descr="Type `DefBool` cannot have the `default` qualifier">default</error> type DefBool = bool;
-        <error descr="Aliased type must be provided for type `Unknown`">type Unknown;</error>
-        type Show<error descr="Type `Show` cannot have type parameter bounds">: Display</error> = u32;
+        <error descr="Type `Unknown` should have a body`">type Unknown;</error>
+        type Show<error descr="Bounds on Type `Show` have no effect">: Display</error> = u32;
     """)
 
     fun `test type alias in trait`() = checkErrors("""
@@ -119,14 +119,15 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
             type Show: Display;
 
             <error descr="Type `DefSize` cannot have the `default` qualifier">default</error> type DefSize = isize;
-            <error descr="Type `PubType` cannot have the `pub` qualifier">pub</error> type PubType;
-            type GenType<error descr="Type `GenType` cannot have generic parameters"><T></error> = Option<T>;
-            type WhereType <error descr="Type `WhereType` cannot have `where` clause">where T: Sized</error> = f64;
+            pub type PubType;
+            type GenType<T> = Option<T>;
+            type WhereType where T: Sized = f64;
         }
     """)
 
     fun `test type alias in trait impl`() = checkErrors("""
             trait Vehicle {
+                type Unknown;
                 type Engine;
                 type Control;
                 type Lock;
@@ -136,13 +137,40 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
             }
             struct NumericVehicle<T> { foo: T }
             impl<T> Vehicle for NumericVehicle<T> {
+                <error descr="Type `Unknown` should have a body">type Unknown;</error>
                 type Engine = u32;
                 default type Control = isize;
-                type Lock<error descr="Type `Lock` cannot have generic parameters"><T></error> = Option<T>;
-                type Cage<error descr="Type `Cage` cannot have type parameter bounds">: Sized</error> = f64;
-                type Insurance <error descr="Type `Insurance` cannot have `where` clause">where T: Sized</error> = i8;
-                <error descr="Aliased type must be provided for type `Driver`">type Driver;</error>
+                type Lock<T> = Option<T>;
+                type Cage<error descr="Bounds on Type `Cage` have no effect">: Sized</error> = f64;
+                type Insurance where T: Sized = i8;
+                <error descr="Type `Driver` should have a body">type Driver;</error>
             }
+    """)
+
+    fun `test type alias in inheret impl`() = checkErrors("""
+            struct S;
+            impl S {
+                <error descr="Type `Unknown` should have a body">type Unknown;</error>
+                type Engine = u32;
+                <error descr="Type `Control` cannot have the `default` qualifier">default</error> type Control = isize;
+                type Lock<T> = Option<T>;
+                type Cage<error descr="Bounds on Type `Cage` have no effect">: Sized</error> = f64;
+                type Insurance where T: Sized = i8;
+                <error descr="Type `Driver` should have a body">type Driver;</error>
+            }
+    """)
+
+    fun `test type alias in extern block`() = checkErrors("""
+        extern {
+            <error descr="Type `Int` cannot have a body">type Int = i32;</error>
+            <error descr="Type `UInt` cannot have a body">pub type UInt = u32;</error>
+            <error descr="Type `Maybe` cannot have a body">type Maybe<error descr="Type `Maybe` cannot have generic parameters"><T></error> = Option<T>;</error>
+            <error descr="Type `SizedMaybe` cannot have a body">type SizedMaybe<error descr="Type `SizedMaybe` cannot have generic parameters"><T></error> <error descr="Type `SizedMaybe` cannot have `where` clause">where T: Sized</error> = Option<T>;</error>
+
+            <error descr="Type `DefBool` cannot have a body"><error descr="Type `DefBool` cannot have the `default` qualifier">default</error> type DefBool = bool;</error>
+            type Unknown;
+            <error descr="Type `Show` cannot have a body">type Show<error descr="Bounds on Type `Show` have no effect">: Display</error> = u32;</error>
+        }
     """)
 
     fun `test const free`() = checkErrors("""
@@ -208,13 +236,6 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         <error>default</error> fn two_errors(<error>u8</error>, a: i16) {}
     """)
 
-    fun `test E0202 type alias in inherent impl`() = checkErrors("""
-        struct Foo;
-        impl Foo {
-            <error descr="Associated types are not allowed in inherent impls [E0202]">type Long = i64;</error>
-        }
-    """)
-
     fun `test add parameter_name fix`() = checkFixByText("Add dummy parameter name", """
         trait Display {
             fn fmt(&self, <warning>F/*caret*/</warning>);
@@ -248,21 +269,13 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         fn foo<const C: usize, <error descr="Lifetime parameters must be declared prior to const parameters">'a</error>>(bar: &'a usize) {}
     """)
 
-    @MockRustcVersion("1.51.0-nightly")
-    fun `test type params after const params (old)`() = checkErrors("""
-        #![feature(min_const_generics)]
-        fn foo<const C: usize, <error descr="Type parameters must be declared prior to const parameters">T</error>>(bar: T) {}
-    """)
-
     @MockRustcVersion("1.34.0-nightly")
     fun `test type params after const params (new)`() = checkErrors("""
-        #![feature(const_generics)]
         fn foo<const C: usize, T>(bar: T) {}
     """)
 
     @MockRustcVersion("1.34.0-nightly")
     fun `test type arguments order`() = checkErrors("""
-        #![feature(const_generics)]
         type A1 = B<C, <error descr="Lifetime arguments must be declared prior to type arguments">'d</error>>;
 
         type A2 = B<C, <error descr="Lifetime arguments must be declared prior to type arguments">'d</error>,
@@ -386,5 +399,44 @@ class RsSyntaxErrorsAnnotatorTest : RsAnnotatorTestBase(RsSyntaxErrorsAnnotator:
         <error descr="Missing type for `const` item">const MY_CONST = 1;</error>
         <error descr="Missing type for `static` item">static MY_STATIC = 1;</error>
         const PARTIAL_TYPE:<error descr="<type> expected, got '='"> </error> = 1;
+    """)
+
+    fun `test extern abi`() = checkErrors("""
+        extern fn extern_fn() {}
+        extern "C" fn extern_c_fn() {}
+        extern "R\x75st" fn extern_fn_with_escape_in_abi() {}
+        extern r"system" fn extern_fn_with_raw_abi() {}
+        extern <error descr="Non-string ABI literal">1</error> fn extern_fn_with_invalid_abi() {}
+
+        extern {}
+        extern "C" {}
+        extern "R\u{0075}st" {}
+        extern r"system" {}
+        extern <error descr="Non-string ABI literal">'C'</error> {}
+
+        type ExternFn = extern fn();
+        type ExternCFn = extern "C" fn();
+        type ExternFnWithEscapeInAbi = extern "R\x75st" fn();
+        type ExternFnWithRawAbi = extern r"system" fn();
+        type ExternFnWithInvalidAbi = extern <error descr="Non-string ABI literal">true</error> fn();
+    """)
+
+    fun `test unsafe module`() = checkErrors("""
+        mod module {}
+        pub mod pub_module {}
+        <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_module {}
+        pub <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_module {}
+
+        mod mod_delc;
+        pub mod pub_mmod_delc;
+        <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_mod_delc;
+        pub <error descr="Module cannot be declared unsafe">unsafe</error> mod unsafe_mod_delc;
+    """)
+
+    fun `test unsafe extern block`() = checkErrors("""
+        extern {}
+        extern "C" {}
+        <error descr="Extern block cannot be declared unsafe">unsafe</error> extern {}
+        <error descr="Extern block cannot be declared unsafe">unsafe</error> extern "Rust" {}
     """)
 }

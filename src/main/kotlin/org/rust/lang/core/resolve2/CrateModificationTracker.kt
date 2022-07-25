@@ -84,6 +84,7 @@ private fun DefMapHolder.processChangedFiles(crate: Crate, defMap: CrateDefMap):
 }
 
 data class CrateMetaData(
+    val name: String,
     val edition: CargoWorkspace.Edition,
     private val features: Map<String, FeatureState>,
     private val cfgOptions: CfgOptions?,
@@ -94,6 +95,7 @@ data class CrateMetaData(
     val procMacroArtifact: CargoWorkspaceData.ProcMacroArtifact?,
 ) {
     constructor(crate: Crate) : this(
+        name = crate.normName,
         edition = crate.edition,
         features = crate.features,
         cfgOptions = crate.cfgOptions,
@@ -113,10 +115,10 @@ fun isCrateChanged(crate: Crate, defMap: CrateDefMap): Boolean {
         { "isCrateChanged should not be called for crates which are not indexed" }
     )
 
-    return defMap.metaData != CrateMetaData(crate) || defMap.hasAnyMissedFileCreated()
+    return defMap.metaData != CrateMetaData(crate) || defMap.hasAnyMissedFileCreated(crate.project)
 }
 
-private fun CrateDefMap.hasAnyMissedFileCreated(): Boolean {
+private fun CrateDefMap.hasAnyMissedFileCreated(project: Project): Boolean {
     val fileManager = VirtualFileManager.getInstance()
-    return missedFiles.any { fileManager.findFileByNioPath(it) != null }
+    return missedFiles.any { fileManager.findFileByNioPath(it)?.toPsiFile(project)?.rustFile != null }
 }

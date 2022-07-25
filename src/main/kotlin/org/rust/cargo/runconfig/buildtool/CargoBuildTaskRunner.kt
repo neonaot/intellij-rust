@@ -23,10 +23,8 @@ import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.openapiext.isHeadlessEnvironment
 import com.intellij.task.*
 import com.intellij.task.impl.ProjectModelBuildTaskImpl
-import com.intellij.util.concurrency.FutureResult
 import org.jetbrains.concurrency.*
 import org.rust.RsBundle
 import org.rust.cargo.project.model.cargoProjects
@@ -35,13 +33,15 @@ import org.rust.cargo.runconfig.CargoCommandRunner
 import org.rust.cargo.runconfig.buildProject
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.createBuildEnvironment
 import org.rust.cargo.runconfig.buildtool.CargoBuildManager.getBuildConfiguration
-import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowEnabled
+import org.rust.cargo.runconfig.buildtool.CargoBuildManager.isBuildToolWindowAvailable
 import org.rust.cargo.runconfig.command.CargoCommandConfiguration
+import org.rust.cargo.runconfig.command.hasRemoteTarget
 import org.rust.cargo.runconfig.createCargoCommandRunConfiguration
 import org.rust.cargo.toolchain.CargoCommandLine
 import org.rust.cargo.toolchain.tools.cargo
 import org.rust.cargo.util.cargoProjectRoot
 import org.rust.ide.notifications.confirmLoadingUntrustedProject
+import org.rust.openapiext.isHeadlessEnvironment
 import org.rust.stdext.buildList
 import java.util.concurrent.*
 
@@ -63,14 +63,15 @@ class CargoBuildTaskRunner : ProjectTaskRunner() {
             return rejectedPromise(RsBundle.message("untrusted.project.notification.execution.error"))
         }
 
-        if (!project.isBuildToolWindowEnabled) {
+        val configuration = context.runConfiguration as? CargoCommandConfiguration
+        if (configuration?.hasRemoteTarget == true || !project.isBuildToolWindowAvailable) {
             invokeLater { project.buildProject() }
             return rejectedPromise()
         }
 
         val resultPromise = AsyncPromise<Result>()
 
-        val waitingIndicator = FutureResult<ProgressIndicator>()
+        val waitingIndicator = CompletableFuture<ProgressIndicator>()
         val queuedTask = BackgroundableProjectTaskRunner(
             project,
             tasks,
@@ -174,7 +175,7 @@ private class BackgroundableProjectTaskRunner(
     private val totalPromise: AsyncPromise<ProjectTaskRunner.Result>,
     private val waitingIndicator: Future<ProgressIndicator>
 ) : Task.Backgroundable(project, "Building...", true) {
-    val executionStarted: FutureResult<Boolean> = FutureResult()
+    val executionStarted: CompletableFuture<Boolean> = CompletableFuture()
 
     override fun run(indicator: ProgressIndicator) {
         if (!waitForStart()) {
@@ -223,7 +224,7 @@ private class BackgroundableProjectTaskRunner(
             // Check if this build wasn't cancelled while it was in queue through waiting indicator
             val cancelled = waitingIndicator.get().isCanceled
             // Notify waiting background task that this build started and there is no more need for this indicator
-            executionStarted.set(true)
+            executionStarted.complete(true)
             return !cancelled
         } catch (e: InterruptedException) {
             totalPromise.setResult(TaskRunnerResults.ABORTED)
@@ -248,13 +249,13 @@ private class BackgroundableProjectTaskRunner(
 
 private class WaitingTask(
     project: Project,
-    val waitingIndicator: FutureResult<ProgressIndicator>,
+    val waitingIndicator: CompletableFuture<ProgressIndicator>,
     val executionStarted: Future<Boolean>
 ) : Task.Backgroundable(project, "Waiting for the current build to finish...", true) {
     override fun run(indicator: ProgressIndicator) {
         // Wait until queued task will start executing.
         // Needed so that user can cancel build tasks from queue.
-        waitingIndicator.set(indicator)
+        waitingIndicator.complete(indicator)
         try {
             while (true) {
                 indicator.checkCanceled()

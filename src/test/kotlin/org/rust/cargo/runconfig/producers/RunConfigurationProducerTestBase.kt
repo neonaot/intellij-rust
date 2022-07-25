@@ -10,6 +10,7 @@ import com.intellij.execution.actions.ConfigurationContext
 import com.intellij.execution.actions.RunConfigurationProducer
 import com.intellij.execution.impl.RunnerAndConfigurationSettingsImpl
 import com.intellij.ide.DataManager
+import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.LangDataKeys.PSI_ELEMENT_ARRAY
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.project.Project
@@ -23,6 +24,7 @@ import org.jdom.Element
 import org.rust.RsTestBase
 import org.rust.cargo.CargoConstants
 import org.rust.cargo.CfgOptions
+import org.rust.cargo.project.model.impl.DEFAULT_EDITION_FOR_TESTS
 import org.rust.cargo.project.model.impl.testCargoProjects
 import org.rust.cargo.project.workspace.CargoWorkspace
 import org.rust.cargo.project.workspace.CargoWorkspace.*
@@ -60,7 +62,7 @@ abstract class RunConfigurationProducerTestBase : RsTestBase() {
         }, testRootDisposable)
 
         val dataContext = DataManager.getInstance().getDataContext(myFixture.editor.component)
-        val configurationContext = ConfigurationContext.getFromContext(dataContext)
+        val configurationContext = ConfigurationContext.getFromContext(dataContext, ActionPlaces.UNKNOWN)
         check(configurationContext)
     }
 
@@ -133,27 +135,27 @@ abstract class RunConfigurationProducerTestBase : RsTestBase() {
         private val hello = """pub fn hello() -> String { return "Hello, World!".to_string(); }"""
 
         fun bin(name: String, path: String, @Language("Rust") code: String = helloWorld): TestProjectBuilder {
-            addTarget(name, TargetKind.Bin, Edition.EDITION_2015, path, code)
+            addTarget(name, TargetKind.Bin, DEFAULT_EDITION_FOR_TESTS, path, code)
             return this
         }
 
         fun example(name: String, path: String, @Language("Rust") code: String = helloWorld): TestProjectBuilder {
-            addTarget(name, TargetKind.ExampleBin, Edition.EDITION_2015, path, code)
+            addTarget(name, TargetKind.ExampleBin, DEFAULT_EDITION_FOR_TESTS, path, code)
             return this
         }
 
         fun test(name: String, path: String, @Language("Rust") code: String = simpleTest): TestProjectBuilder {
-            addTarget(name, TargetKind.Test, Edition.EDITION_2015, path, code)
+            addTarget(name, TargetKind.Test, DEFAULT_EDITION_FOR_TESTS, path, code)
             return this
         }
 
         fun bench(name: String, path: String, @Language("Rust") code: String = simpleBench): TestProjectBuilder {
-            addTarget(name, TargetKind.Bench, Edition.EDITION_2015, path, code)
+            addTarget(name, TargetKind.Bench, DEFAULT_EDITION_FOR_TESTS, path, code)
             return this
         }
 
         fun lib(name: String, path: String, @Language("Rust") code: String = hello): TestProjectBuilder {
-            addTarget(name, TargetKind.Lib(LibKind.LIB), Edition.EDITION_2015, path, code)
+            addTarget(name, TargetKind.Lib(LibKind.LIB), DEFAULT_EDITION_FOR_TESTS, path, code)
             return this
         }
 
@@ -204,7 +206,7 @@ abstract class RunConfigurationProducerTestBase : RsTestBase() {
                             },
                             source = null,
                             origin = PackageOrigin.WORKSPACE,
-                            edition = Edition.EDITION_2015,
+                            edition = DEFAULT_EDITION_FOR_TESTS,
                             features = emptyMap(),
                             enabledFeatures = emptySet(),
                             cfgOptions = CfgOptions.EMPTY,
@@ -216,7 +218,6 @@ abstract class RunConfigurationProducerTestBase : RsTestBase() {
                     rawDependencies = emptyMap(),
                     workspaceRootUrl = contentRootUrl
                 ),
-                CfgOptions.DEFAULT
             )
 
             project.testCargoProjects.createTestProject(myFixture.findFileInTempDir("."), projectDescription)

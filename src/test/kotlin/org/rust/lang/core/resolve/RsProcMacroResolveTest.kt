@@ -5,13 +5,10 @@
 
 package org.rust.lang.core.resolve
 
-import org.rust.MockEdition
-import org.rust.ProjectDescriptor
-import org.rust.UseNewResolve
-import org.rust.WithDependencyRustProjectDescriptor
-import org.rust.cargo.project.workspace.CargoWorkspace
+import org.rust.*
+import org.rust.ide.experiments.RsExperiments.EVALUATE_BUILD_SCRIPTS
+import org.rust.ide.experiments.RsExperiments.PROC_MACROS
 
-@MockEdition(CargoWorkspace.Edition.EDITION_2018)
 @ProjectDescriptor(WithDependencyRustProjectDescriptor::class)
 class RsProcMacroResolveTest : RsResolveTestBase() {
     // FIXME
@@ -76,6 +73,18 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
         pub fn example_proc_macro(item: TokenStream) -> TokenStream { item }
     //- lib.rs
         use dep_proc_macro::example_proc_macro;
+        example_proc_macro!();
+        //^ dep-proc-macro/lib.rs
+    """)
+
+    fun `test resolve bang proc macro from macro call (other item with same name)`() = stubOnlyResolve("""
+    //- dep-proc-macro/lib.rs
+        mod example_proc_macro {}
+        #[proc_macro]
+        pub fn example_proc_macro(item: TokenStream) -> TokenStream { item }
+    //- lib.rs
+        #[macro_use]
+        extern crate dep_proc_macro;
         example_proc_macro!();
         //^ dep-proc-macro/lib.rs
     """)
@@ -271,7 +280,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
         struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive by qualified path with re-export 1`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -284,7 +292,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive by qualified path with re-export 2`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -299,9 +306,7 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
-    fun `test resolve attribute macro by qualified path with re-export 1`() = expect<IllegalStateException> {
-    stubOnlyResolve("""
+    fun `test resolve attribute macro by qualified path with re-export 1`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_attribute]
             pub fn example_proc_macro(attr: TokenStream, item: TokenStream) -> TokenStream { item }
@@ -312,11 +317,8 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
                           //^ dep-proc-macro/lib.rs
             struct S;
     """)
-    }
 
-    @UseNewResolve
-    fun `test resolve attribute macro by qualified path with re-export 2`() = expect<IllegalStateException> {
-    stubOnlyResolve("""
+    fun `test resolve attribute macro by qualified path with re-export 2`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_attribute]
             pub fn example_proc_macro(attr: TokenStream, item: TokenStream) -> TokenStream { item }
@@ -329,7 +331,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
                                //^ dep-proc-macro/lib.rs
             struct S;
     """)
-    }
 
     fun `test resolve bang proc macro from macro call through macro_use`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
@@ -343,7 +344,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
               //^ dep-proc-macro/lib.rs
     """)
 
-    @UseNewResolve
     fun `test resolve bang proc macro from macro call through macro_use with rename`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro]
@@ -475,7 +475,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve attr proc macro from macro call through macro_use with rename`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_attribute]
@@ -491,7 +490,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive proc macro from macro call through macro_use`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -505,7 +503,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test custom derive proc macro is not resolved to decl macro through macro_use 1`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -522,7 +519,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test custom derive proc macro is not resolved to decl macro through macro_use 2`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -542,7 +538,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive proc macro from macro call through macro_use with rename`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -558,7 +553,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive through macro_use to the last extern crate 1`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -577,7 +571,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive through macro_use to the last extern crate 2`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -596,7 +589,6 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             struct S;
     """)
 
-    @UseNewResolve
     fun `test resolve custom derive through macro_use to the last extern crate 3`() = stubOnlyResolve("""
         //- dep-proc-macro/lib.rs
             #[proc_macro_derive(ProcMacroName)]
@@ -613,5 +605,30 @@ class RsProcMacroResolveTest : RsResolveTestBase() {
             extern crate dep_proc_macro_2;
             #[macro_use]
             extern crate dep_proc_macro;
+    """)
+
+    @ProjectDescriptor(WithProcMacroRustProjectDescriptor::class)
+    fun `test hardcoded not a macro is resolved`() = stubOnlyResolve("""
+    //- main.rs
+        use test_proc_macros::attr_hardcoded_not_a_macro;
+
+        #[attr_hardcoded_not_a_macro]
+          //^ ...test-proc-macros/src/lib.rs
+        fn main() {}
+    """)
+
+    @WithExperimentalFeatures(EVALUATE_BUILD_SCRIPTS, PROC_MACROS)
+    @ProjectDescriptor(WithProcMacroAndDependencyRustProjectDescriptor::class)
+    fun `test hardcoded not a macro on proc macro definition`() = stubOnlyResolve("""
+    //- dep-proc-macro/lib.rs
+        #[test_proc_macros::attr_hardcoded_not_a_macro]
+        #[proc_macro]
+        pub fn example_proc_macro(input: TokenStream) -> TokenStream {
+            input
+        }
+    //- lib.rs
+        fn main() {
+            dep_proc_macro::example_proc_macro!();
+        }                 //^ dep-proc-macro/lib.rs
     """)
 }

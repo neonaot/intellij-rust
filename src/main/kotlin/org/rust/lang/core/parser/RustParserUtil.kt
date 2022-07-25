@@ -10,7 +10,6 @@ import com.intellij.lang.PsiBuilder
 import com.intellij.lang.PsiBuilderUtil
 import com.intellij.lang.WhitespacesAndCommentsBinder
 import com.intellij.lang.parser.GeneratedParserUtilBase
-import com.intellij.lang.parser.rawLookupText
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.util.Key
 import com.intellij.psi.TokenType
@@ -27,6 +26,7 @@ import org.rust.lang.core.psi.RS_KEYWORDS
 import org.rust.lang.core.psi.RsElementTypes.*
 import org.rust.lang.core.psi.tokenSetOf
 import org.rust.stdext.makeBitMask
+import kotlin.math.max
 
 @Suppress("UNUSED_PARAMETER")
 object RustParserUtil : GeneratedParserUtilBase() {
@@ -71,6 +71,8 @@ object RustParserUtil : GeneratedParserUtilBase() {
      * See `Restrictions::RESTRICTION_STMT_EXPR` in libsyntax
      */
     enum class StmtMode { ON, OFF }
+
+    enum class RestrictedConstExprMode { ON, OFF }
 
     enum class MacroCallParsingMode(
         val attrsAndVis: Boolean,
@@ -119,6 +121,9 @@ object RustParserUtil : GeneratedParserUtilBase() {
     private val MACRO_BRACE_PARENS: Int = makeBitMask(7)
     private val MACRO_BRACE_BRACKS: Int = makeBitMask(8)
     private val MACRO_BRACE_BRACES: Int = makeBitMask(9)
+
+    private val RESTRICTED_CONST_EXPR_MODE: Int = makeBitMask(10)
+
     private fun setPathMod(flags: Int, mode: PathParsingMode): Int {
         val flag = when (mode) {
             PathParsingMode.VALUE -> PATH_VALUE
@@ -190,6 +195,20 @@ object RustParserUtil : GeneratedParserUtilBase() {
         b.tokenType != LBRACE || checkStructAllowed(b, level)
 
     @JvmStatic
+    fun checkGtAllowed(b: PsiBuilder, level: Int): Boolean =
+        !BitUtil.isSet(b.flags, RESTRICTED_CONST_EXPR_MODE)
+
+    @JvmStatic
+    fun withRestrictedConstExprMode(b: PsiBuilder, level: Int, mode: RestrictedConstExprMode, parser: Parser): Boolean {
+        val oldFlags = b.flags
+        val newFlags = oldFlags.setFlag(RESTRICTED_CONST_EXPR_MODE, mode == RestrictedConstExprMode.ON)
+        b.flags = newFlags
+        val result = parser.parse(b, level)
+        b.flags = oldFlags
+        return result
+    }
+
+    @JvmStatic
     fun setStmtMode(b: PsiBuilder, level: Int, mode: StmtMode): Boolean {
         b.pushFlag(STMT_EXPR_MODE, mode == StmtMode.ON)
         return true
@@ -239,7 +258,16 @@ object RustParserUtil : GeneratedParserUtilBase() {
         val newFlags = setPathMod(BitUtil.set(oldFlags, TYPE_QUAL_ALLOWED, typeQualsMode == TypeQualsMode.ON), mode)
         b.flags = newFlags
         check(getPathMod(b.flags) == mode)
-        val result = parser.parse(b, level)
+
+        // A hack that reduces the growth rate of `level`. This actually allows a deeper path nesting.
+        val prevPathFrame = ErrorState.get(b).currentFrame?.parentFrame?.ancestorOfTypeOrSelf(PATH)
+        val nextLevel = if (prevPathFrame != null) {
+            max(prevPathFrame.level + 2, level - 9)
+        } else {
+            level
+        }
+
+        val result = parser.parse(b, nextLevel)
         b.flags = oldFlags
         return result
     }
@@ -376,7 +404,7 @@ object RustParserUtil : GeneratedParserUtilBase() {
         val bound = enter_section_(b)
         val traitRef = enter_section_(b)
 
-        if (!pathP.parse(b, level + 1) || nextTokenIs(b, EXCL)) {
+        if (!pathP.parse(b, level) || nextTokenIs(b, EXCL)) {
             // May be it is lifetime `'a` or `for<'a>` or `foo!()`
             exit_section_(b, traitRef, null, false)
             exit_section_(b, bound, null, false)
@@ -396,8 +424,58 @@ object RustParserUtil : GeneratedParserUtilBase() {
         exit_section_(b, traitRef, TRAIT_REF, true)
         exit_section_(b, bound, BOUND, true)
         exit_section_(b, polybound, POLYBOUND, true)
-        val result = traitTypeUpperP.parse(b, level + 1)
+        val result = traitTypeUpperP.parse(b, level)
         exit_section_(b, baseOrTrait, TRAIT_TYPE, result)
+        return result
+    }
+
+    @Suppress("DuplicatedCode")
+    @JvmStatic
+    fun typeReferenceOrAssocTypeBinding(
+        b: PsiBuilder,
+        level: Int,
+        pathP: Parser,
+        assocTypeBindingUpperP: Parser,
+        typeReferenceP: Parser,
+        traitTypeUpperP: Parser,
+    ): Boolean {
+        if (b.tokenType == DYN || b.tokenType == IDENTIFIER && b.tokenText == "dyn" && b.lookAhead(1) != EXCL) {
+            return typeReferenceP.parse(b, level)
+        }
+
+        val typeOrAssoc = enter_section_(b)
+        val polybound = enter_section_(b)
+        val bound = enter_section_(b)
+        val traitRef = enter_section_(b)
+
+        if (!pathP.parse(b, level) || nextTokenIsFast(b, EXCL)) {
+            exit_section_(b, traitRef, null, false)
+            exit_section_(b, bound, null, false)
+            exit_section_(b, polybound, null, false)
+            exit_section_(b, typeOrAssoc, null, false)
+            return typeReferenceP.parse(b, level)
+        }
+
+        if (nextTokenIsFast(b, PLUS) ) {
+            exit_section_(b, traitRef, TRAIT_REF, true)
+            exit_section_(b, bound, BOUND, true)
+            exit_section_(b, polybound, POLYBOUND, true)
+            val result = traitTypeUpperP.parse(b, level)
+            exit_section_(b, typeOrAssoc, TRAIT_TYPE, result)
+            return result
+        }
+
+        exit_section_(b, traitRef, null, true)
+        exit_section_(b, bound, null, true)
+        exit_section_(b, polybound, null, true)
+
+        if (!nextTokenIsFast(b, EQ) && !nextTokenIsFast(b, COLON)) {
+            exit_section_(b, typeOrAssoc, BASE_TYPE, true)
+            return true
+        }
+
+        val result = assocTypeBindingUpperP.parse(b, level)
+        exit_section_(b, typeOrAssoc, ASSOC_TYPE_BINDING, result)
         return result
     }
 
@@ -420,7 +498,7 @@ object RustParserUtil : GeneratedParserUtilBase() {
             }
         }
 
-        put(RustParser::ExprMacroArgument, true, "try", "await", "dbg")
+        put(RustParser::ExprMacroArgument, true, "dbg")
         put(
             RustParser::FormatMacroArgument, true, "format", "format_args", "format_args_nl", "write", "writeln",
             "print", "println", "eprint", "eprintln", "panic", "unimplemented", "unreachable", "todo"
@@ -746,5 +824,13 @@ object RustParserUtil : GeneratedParserUtilBase() {
     @JvmStatic
     fun parseSimplePat(builder: PsiBuilder): Boolean {
         return RustParser.SimplePat(builder, 0)
+    }
+
+    private tailrec fun Frame.ancestorOfTypeOrSelf(elementType: IElementType): Frame? {
+        return if (this.elementType == elementType) {
+            this
+        } else {
+            parentFrame?.ancestorOfTypeOrSelf(elementType)
+        }
     }
 }

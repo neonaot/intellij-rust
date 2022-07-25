@@ -6,6 +6,7 @@
 package org.rust.lang.core.crate
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.UserDataHolderEx
 import com.intellij.openapi.vfs.VirtualFile
 import org.rust.cargo.CfgOptions
 import org.rust.cargo.project.model.CargoProject
@@ -20,7 +21,7 @@ import org.rust.lang.core.psi.RsFile
  * An immutable object describes a *crate* from the *rustc* point of view.
  * In Cargo-based project this is usually a wrapper around [CargoWorkspace.Target]
  */
-interface Crate {
+interface Crate : UserDataHolderEx {
     /**
      * This id can be saved to a disk and then used to find the crate via [CrateGraphService.findCrateById].
      * Can be `null` for crates that are not represented in the physical filesystem and can't be retrieved
@@ -29,8 +30,8 @@ interface Crate {
     val id: CratePersistentId?
     val edition: CargoWorkspace.Edition
 
-    val cargoProject: CargoProject
-    val cargoWorkspace: CargoWorkspace
+    val cargoProject: CargoProject?
+    val cargoWorkspace: CargoWorkspace?
     val cargoTarget: CargoWorkspace.Target?
     val kind: CargoWorkspace.TargetKind
     val origin: PackageOrigin
@@ -64,9 +65,12 @@ interface Crate {
      * A cargo package can have cyclic dependencies through `[dev-dependencies]` (see [CrateGraphService] docs).
      * Cyclic dependencies are not contained in [dependencies], [flatDependencies] or [reverseDependencies].
      */
-    @JvmDefault
     val dependenciesWithCyclic: Collection<Dependency>
         get() = dependencies
+
+    /** A cargo package can have cyclic dependencies through `[dev-dependencies]` (see [CrateGraphService] docs) */
+    val hasCyclicDevDependencies: Boolean
+        get() = false
 
     /**
      * A root module of the crate, also known as "crate root". Usually it's `main.rs` or `lib.rs`.
@@ -89,8 +93,7 @@ interface Crate {
      */
     val normName: String
 
-    @JvmDefault
-    val project: Project get() = cargoProject.project
+    val project: Project
 
     /**
      * A procedural macro compiler artifact (compiled binary).

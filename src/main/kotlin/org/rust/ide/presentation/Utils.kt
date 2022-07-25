@@ -58,7 +58,7 @@ fun getPresentationForStructure(psi: RsElement): ItemPresentation {
     }
     val icon = psi.getIcon(Iconable.ICON_FLAG_VISIBILITY)
     val textAttributes = when {
-        psi is RsDocAndAttributeOwner && !psi.isEnabledByCfgSelf -> RsColor.CFG_DISABLED_CODE.textAttributesKey
+        psi is RsDocAndAttributeOwner && !psi.isEnabledByCfgSelfOrInAttrProcMacroBody -> RsColor.CFG_DISABLED_CODE.textAttributesKey
         psi.isExpandedFromMacro -> RsColor.GENERATED_ITEM.textAttributesKey
         else -> null
     }
@@ -74,6 +74,9 @@ private fun presentableName(psi: RsElement): String? {
             val trait = psi.traitRef?.text
             buildString {
                 if (trait != null) {
+                    if (psi.isNegativeImpl) {
+                        append("!")
+                    }
                     append("$trait for ")
                 }
                 append(type)

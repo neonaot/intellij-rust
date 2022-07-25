@@ -5,8 +5,8 @@
 
 package org.rust.lang.core.crate.impl
 
-import com.intellij.openapiext.Testmark
 import org.rust.lang.core.crate.Crate
+import org.rust.openapiext.Testmark
 
 fun Iterable<Crate.Dependency>.flattenTopSortedDeps(): LinkedHashSet<Crate> {
     val flatDeps = linkedSetOf<Crate>()
@@ -22,5 +22,5 @@ fun Iterable<Crate.Dependency>.flattenTopSortedDeps(): LinkedHashSet<Crate> {
 }
 
 object CrateGraphTestmarks {
-    val cyclicDevDependency = Testmark("cyclicDevDependency")
+    object CyclicDevDependency : Testmark()
 }

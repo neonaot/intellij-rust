@@ -5,7 +5,6 @@
 
 package org.rust.ide.refactoring
 
-import com.intellij.openapiext.hitOnFalse
 import com.intellij.psi.PsiElement
 import com.intellij.psi.codeStyle.NameUtil
 import com.intellij.psi.util.PsiTreeUtil
@@ -15,12 +14,9 @@ import org.rust.ide.utils.CallInfo
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.ancestorOrSelf
 import org.rust.lang.core.psi.ext.ancestorStrict
-import org.rust.lang.core.types.ty.TyAdt
-import org.rust.lang.core.types.ty.TyInteger
-import org.rust.lang.core.types.ty.TyTraitObject
-import org.rust.lang.core.types.ty.TyTypeParameter
-import org.rust.lang.core.types.ty.Ty
+import org.rust.lang.core.types.ty.*
 import org.rust.lang.core.types.type
+import org.rust.openapiext.hitOnFalse
 import org.rust.stdext.mapNotNullToSet
 
 
@@ -70,7 +66,7 @@ fun Ty.suggestedNames(context: PsiElement, additionalNamesInScope: Set<String> =
     return finalizeNameSelection(context, names, additionalNamesInScope)
 }
 
-private fun freshenName(name: String, usedNames: Set<String>): String {
+fun freshenName(name: String, usedNames: Set<String>): String {
     var newName = name
     var i = 1
     while (i < FRESHEN_LIMIT && usedNames.contains(newName)) {
@@ -108,7 +104,7 @@ private val uselessNames = listOf("new", "default")
 private fun LinkedHashSet<String>.addName(name: String?) {
     if (name == null || name in uselessNames || !isValidRustVariableIdentifier(name)) return
     NameUtil.getSuggestionsByName(name, "", "", false, false, false)
-        .filter { it !in uselessNames && IntroduceVariableTestmarks.invalidNamePart.hitOnFalse(isValidRustVariableIdentifier(it)) }
+        .filter { it !in uselessNames && IntroduceVariableTestmarks.InvalidNamePart.hitOnFalse(isValidRustVariableIdentifier(it)) }
         .mapTo(this) { it.toSnakeCase(false) }
 }
 

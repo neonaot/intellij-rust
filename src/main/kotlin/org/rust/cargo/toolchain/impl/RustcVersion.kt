@@ -8,6 +8,7 @@ package org.rust.cargo.toolchain.impl
 import com.google.common.annotations.VisibleForTesting
 import com.intellij.util.text.SemVer
 import org.rust.cargo.toolchain.RustChannel
+import org.rust.cargo.toolchain.RustChannel.Companion.fromPreRelease
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 
@@ -35,7 +36,7 @@ fun parseRustcVersion(lines: List<String>): RustcVersion? {
     val hostRe = "host: (.*)".toRegex()
     val commitHashRe = "commit-hash: ([A-Fa-f0-9]{40})".toRegex()
     val commitDateRe = """commit-date: (\d{4}-\d{2}-\d{2})""".toRegex()
-    val find = { re: Regex -> lines.mapNotNull { re.matchEntire(it) }.firstOrNull() }
+    val find = { re: Regex -> lines.firstNotNullOfOrNull { re.matchEntire(it) } }
 
     val releaseMatch = find(releaseRe) ?: return null
     val hostText = find(hostRe)?.groups?.get(1)?.value ?: return null
@@ -48,13 +49,7 @@ fun parseRustcVersion(lines: List<String>): RustcVersion? {
     }
 
     val semVer = SemVer.parseFromText(versionText) ?: return null
-    val releaseSuffix = semVer.preRelease.orEmpty()
-    val channel = when {
-        releaseSuffix.isEmpty() -> RustChannel.STABLE
-        releaseSuffix.startsWith("beta") -> RustChannel.BETA
-        releaseSuffix.startsWith("nightly") -> RustChannel.NIGHTLY
-        releaseSuffix.startsWith("dev") -> RustChannel.DEV
-        else -> RustChannel.DEFAULT
-    }
+    val preRelease = semVer.preRelease.orEmpty()
+    val channel = fromPreRelease(preRelease)
     return RustcVersion(semVer, hostText, channel, commitHash, commitDate)
 }

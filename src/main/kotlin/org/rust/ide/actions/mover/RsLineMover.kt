@@ -9,13 +9,13 @@ import com.intellij.codeInsight.editorActions.moveUpDown.LineMover
 import com.intellij.codeInsight.editorActions.moveUpDown.LineRange
 import com.intellij.codeInsight.editorActions.moveUpDown.StatementUpDownMover
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapiext.Testmark
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiWhiteSpace
 import org.rust.lang.core.psi.*
 import org.rust.lang.core.psi.ext.ancestorStrict
 import org.rust.lang.core.psi.ext.elementType
+import org.rust.openapiext.Testmark
 
 abstract class RsLineMover : LineMover() {
     override fun checkAvailable(editor: Editor, file: PsiFile, info: MoveInfo, down: Boolean): Boolean {
@@ -104,8 +104,8 @@ abstract class RsLineMover : LineMover() {
 }
 
 object UpDownMoverTestMarks {
-    val moveOutOfImpl = Testmark("moveOutOfImpl")
-    val moveOutOfMatch = Testmark("moveOutOfMatch")
-    val moveOutOfBody = Testmark("moveOutOfBody")
-    val moveOutOfBlock = Testmark("moveOutOfBlock")
+    object MoveOutOfImpl : Testmark()
+    object MoveOutOfMatch : Testmark()
+    object MoveOutOfBody : Testmark()
+    object MoveOutOfBlock : Testmark()
 }

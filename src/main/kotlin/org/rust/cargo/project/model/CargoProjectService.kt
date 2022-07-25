@@ -13,7 +13,9 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.roots.ContentEntry
+import com.intellij.openapi.util.NlsContexts.Tooltip
 import com.intellij.openapi.util.UserDataHolderEx
+import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.messages.Topic
@@ -26,7 +28,9 @@ import org.rust.cargo.project.workspace.PackageFeature
 import org.rust.cargo.toolchain.RsToolchainBase
 import org.rust.cargo.toolchain.impl.RustcVersion
 import org.rust.cargo.toolchain.tools.isRustupAvailable
+import org.rust.ide.experiments.RsExperiments
 import org.rust.ide.notifications.showBalloon
+import org.rust.openapiext.isFeatureEnabled
 import org.rust.openapiext.pathAsPath
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
@@ -64,10 +68,26 @@ interface CargoProjectsService {
             "cargo projects changes",
             CargoProjectsListener::class.java
         )
+
+        val CARGO_PROJECTS_REFRESH_TOPIC: Topic<CargoProjectsRefreshListener> = Topic(
+            "Cargo refresh",
+            CargoProjectsRefreshListener::class.java
+        )
     }
 
     fun interface CargoProjectsListener {
         fun cargoProjectsUpdated(service: CargoProjectsService, projects: Collection<CargoProject>)
+    }
+
+    interface CargoProjectsRefreshListener {
+        fun onRefreshStarted()
+        fun onRefreshFinished(status: CargoRefreshStatus)
+    }
+
+    enum class CargoRefreshStatus {
+        SUCCESS,
+        FAILURE,
+        CANCEL
     }
 }
 
@@ -111,13 +131,18 @@ interface CargoProject : UserDataHolderEx {
     sealed class UpdateStatus(private val priority: Int) {
         object UpToDate : UpdateStatus(0)
         object NeedsUpdate : UpdateStatus(1)
-        class UpdateFailed(val reason: String) : UpdateStatus(2)
+        class UpdateFailed(@Suppress("UnstableApiUsage") @Tooltip val reason: String) : UpdateStatus(2)
 
         fun merge(status: UpdateStatus): UpdateStatus = if (priority >= status.priority) this else status
     }
 }
 
-data class RustcInfo(val sysroot: String, val version: RustcVersion?, val targets: List<String>? = null)
+data class RustcInfo(
+    val sysroot: String,
+    val version: RustcVersion?,
+    val rustupActiveToolchain: String? = null,
+    val targets: List<String>? = null
+)
 
 fun guessAndSetupRustProject(project: Project, explicitRequest: Boolean = false): Boolean {
     if (!explicitRequest) {
@@ -174,3 +199,6 @@ fun ContentEntry.setup(contentRoot: VirtualFile) {
     }
     makeVfsUrl(CargoConstants.ProjectLayout.target)?.let(::addExcludeFolder)
 }
+
+val isNewProjectModelImportEnabled: Boolean
+    get() = Registry.`is`("org.rust.cargo.new.auto.import", false)

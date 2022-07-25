@@ -23,7 +23,6 @@ interface RsMetaItemPsiOrStub {
     val path: RsPathPsiOrStub?
     val metaItemArgs: RsMetaItemArgsPsiOrStub?
 
-    @JvmDefault
     val metaItemArgsList: List<RsMetaItemPsiOrStub>
         get() = metaItemArgs?.metaItemList.orEmpty()
 
@@ -39,7 +38,9 @@ interface RsMetaItemArgsPsiOrStub {
 interface RsAttributeOwnerPsiOrStub<T : RsMetaItemPsiOrStub> {
     val rawMetaItems: Sequence<T>
 
-    @JvmDefault
+    val rawOuterMetaItems: Sequence<T>
+        get() = emptySequence()
+
     val containingCrate: Crate?
         get() = when (this) {
             is PsiElement -> (this as RsElement).containingCrate
@@ -47,3 +48,9 @@ interface RsAttributeOwnerPsiOrStub<T : RsMetaItemPsiOrStub> {
             else -> error("unreachable")
         }
 }
+
+/**
+ * [org.rust.lang.core.psi.ext.RsAttrProcMacroOwner] or
+ * [org.rust.lang.core.stubs.RsAttrProcMacroOwnerStub]
+ */
+interface RsAttrProcMacroOwnerPsiOrStub<T : RsMetaItemPsiOrStub> : RsAttributeOwnerPsiOrStub<T>

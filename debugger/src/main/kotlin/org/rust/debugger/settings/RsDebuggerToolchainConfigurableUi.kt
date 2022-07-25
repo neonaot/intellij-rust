@@ -5,21 +5,21 @@
 
 package org.rust.debugger.settings
 
-import com.intellij.openapi.Disposable
-import com.intellij.openapi.options.ConfigurableUi
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.Link
-import com.intellij.ui.layout.panel
+import com.intellij.ui.dsl.builder.Panel
+import org.rust.debugger.RsDebuggerBundle
 import org.rust.debugger.RsDebuggerToolchainService
 import org.rust.debugger.RsDebuggerToolchainService.LLDBStatus
+import org.rust.openapiext.fullWidthCell
 import org.rust.openapiext.pathToDirectoryTextField
 import javax.swing.AbstractButton
 import javax.swing.JComponent
 import javax.swing.JLabel
 
-class RsDebuggerToolchainConfigurableUi : ConfigurableUi<RsDebuggerSettings>, Disposable {
+class RsDebuggerToolchainConfigurableUi : RsDebuggerUiComponent() {
 
-    private val downloadLink: JComponent = Link("Download") {
+    private val downloadLink: JComponent = Link(RsDebuggerBundle.message("settings.rust.debugger.toolchain.download.label")) {
         val result = RsDebuggerToolchainService.getInstance().downloadDebugger()
         if (result is RsDebuggerToolchainService.DownloadResult.Ok) {
             lldbPathField.text = result.lldbDir.absolutePath
@@ -28,18 +28,18 @@ class RsDebuggerToolchainConfigurableUi : ConfigurableUi<RsDebuggerSettings>, Di
 
     private val lldbPathField = pathToDirectoryTextField(
         this,
-        "Select LLDB directory path",
+        RsDebuggerBundle.message("settings.rust.debugger.toolchain.select.lldb.directory.dialog.title"),
         onTextChanged = ::update
     ).apply {
         isEditable = false
     }
 
     private val downloadAutomaticallyCheckBox: JBCheckBox =
-        JBCheckBox("Download and update debugger automatically", RsDebuggerSettings.getInstance().downloadAutomatically)
+        JBCheckBox(RsDebuggerBundle.message("settings.rust.debugger.toolchain.download.debugger.automatically.checkbox"), RsDebuggerSettings.getInstance().downloadAutomatically)
 
     override fun isModified(settings: RsDebuggerSettings): Boolean {
         return settings.lldbPath != lldbPathField.text &&
-               settings.downloadAutomatically != downloadAutomaticallyCheckBox.isSelected
+            settings.downloadAutomatically != downloadAutomaticallyCheckBox.isSelected
     }
 
     override fun reset(settings: RsDebuggerSettings) {
@@ -52,25 +52,24 @@ class RsDebuggerToolchainConfigurableUi : ConfigurableUi<RsDebuggerSettings>, Di
         settings.downloadAutomatically = downloadAutomaticallyCheckBox.isSelected
     }
 
-    override fun getComponent(): JComponent {
+    override fun buildUi(panel: Panel) {
         lldbPathField.text = RsDebuggerSettings.getInstance().lldbPath.orEmpty()
         update()
-        return panel {
-            row("LLDB path:") { lldbPathField() }
-            row("") { downloadLink() }
-            row { downloadAutomaticallyCheckBox() }
+        with(panel) {
+            row(RsDebuggerBundle.message("settings.rust.debugger.toolchain.lldb.path.label")) { fullWidthCell(lldbPathField) }
+            row("") { cell(downloadLink) }
+            row { cell(downloadAutomaticallyCheckBox) }
         }
     }
-
-    override fun dispose() {}
 
     private fun update() {
         @Suppress("MoveVariableDeclarationIntoWhen")
         val status = RsDebuggerToolchainService.getInstance().getLLDBStatus(lldbPathField.text)
         val (text, isVisible) = when (status) {
-            LLDBStatus.Unavailable -> error("Unreachable")
-            LLDBStatus.NeedToDownload -> "Download" to true
-            LLDBStatus.NeedToUpdate -> "Update" to true
+            LLDBStatus.Unavailable,
+            LLDBStatus.Bundled -> error("Unreachable")
+            LLDBStatus.NeedToDownload -> RsDebuggerBundle.message("settings.rust.debugger.toolchain.download.label") to true
+            LLDBStatus.NeedToUpdate -> RsDebuggerBundle.message("settings.rust.debugger.toolchain.update.label") to true
             is LLDBStatus.Binaries -> "" to false
         }
         when (downloadLink) {

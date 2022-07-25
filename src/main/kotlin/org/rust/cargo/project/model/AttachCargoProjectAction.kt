@@ -16,10 +16,10 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapiext.isUnitTestMode
 import org.rust.cargo.CargoConstants
 import org.rust.cargo.project.toolwindow.CargoToolWindow
 import org.rust.ide.notifications.RsEditorNotificationPanel
+import org.rust.openapiext.isUnitTestMode
 import org.rust.openapiext.pathAsPath
 import org.rust.openapiext.saveAllDocuments
 import java.nio.file.Path
@@ -120,8 +120,8 @@ object CargoProjectChooserDescriptor : FileChooserDescriptor(true, true, false, 
         withTitle("Select Cargo.toml")
     }
 
-    override fun isFileSelectable(file: VirtualFile): Boolean {
-        return super.isFileSelectable(file) && (!file.isDirectory || file.findChild(CargoConstants.MANIFEST_FILE) != null)
+    override fun isFileSelectable(file: VirtualFile?): Boolean {
+        return super.isFileSelectable(file) && file != null && (!file.isDirectory || file.findChild(CargoConstants.MANIFEST_FILE) != null)
     }
 }
 

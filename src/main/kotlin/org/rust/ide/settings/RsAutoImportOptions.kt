@@ -6,39 +6,32 @@
 package org.rust.ide.settings
 
 import com.intellij.application.options.editor.AutoImportOptionsProvider
-import com.intellij.ui.IdeBorderFactory
-import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.layout.panel
-import org.rust.openapiext.CheckboxDelegate
-import javax.swing.JComponent
+import com.intellij.openapi.application.ApplicationBundle
+import com.intellij.openapi.options.UiDslUnnamedConfigurable
+import com.intellij.ui.dsl.builder.Panel
+import com.intellij.ui.dsl.builder.RightGap
+import com.intellij.ui.dsl.builder.bindSelected
+import org.rust.RsBundle
 
-class RsAutoImportOptions : AutoImportOptionsProvider {
+class RsAutoImportOptions : UiDslUnnamedConfigurable.Simple(), AutoImportOptionsProvider {
 
-    private val showImportPopupCheckbox: JBCheckBox = JBCheckBox("Show import popup")
-    private var showImportPopup: Boolean by CheckboxDelegate(showImportPopupCheckbox)
-
-    private val importOutOfScopeItemsCheckbox: JBCheckBox = JBCheckBox("Import out-of-scope items on completion")
-    private var importOutOfScopeItems: Boolean by CheckboxDelegate(importOutOfScopeItemsCheckbox)
-
-    override fun createComponent(): JComponent = panel {
-        row { showImportPopupCheckbox() }
-        row { importOutOfScopeItemsCheckbox() }
-    }.apply { border = IdeBorderFactory.createTitledBorder("Rust") }
-
-    override fun isModified(): Boolean {
-        return showImportPopup != RsCodeInsightSettings.getInstance().showImportPopup ||
-            importOutOfScopeItems != RsCodeInsightSettings.getInstance().importOutOfScopeItems
-    }
-
-    override fun apply() {
+    override fun Panel.createContent() {
         val settings = RsCodeInsightSettings.getInstance()
-        settings.showImportPopup = showImportPopup
-        settings.importOutOfScopeItems = importOutOfScopeItems
-    }
-
-    override fun reset() {
-        val settings = RsCodeInsightSettings.getInstance()
-        showImportPopup = settings.showImportPopup
-        importOutOfScopeItems = settings.importOutOfScopeItems
+        group(RsBundle.message("settings.rust.auto.import.title")) {
+            row {
+                checkBox(RsBundle.message("settings.rust.auto.import.show.popup"))
+                    .bindSelected(settings::showImportPopup)
+            }
+            row {
+                checkBox(RsBundle.message("settings.rust.auto.import.on.completion"))
+                    .bindSelected(settings::importOutOfScopeItems)
+            }
+            row {
+                checkBox(ApplicationBundle.message("checkbox.add.unambiguous.imports.on.the.fly"))
+                    .bindSelected(settings::addUnambiguousImportsOnTheFly)
+                    .gap(RightGap.SMALL)
+                contextHelp(ApplicationBundle.message("help.add.unambiguous.imports"))
+            }
+        }
     }
 }

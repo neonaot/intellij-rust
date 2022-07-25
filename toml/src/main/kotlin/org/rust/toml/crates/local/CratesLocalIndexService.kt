@@ -6,34 +6,54 @@
 package org.rust.toml.crates.local
 
 import com.intellij.openapi.components.service
-import com.vdurmont.semver4j.Semver
-import com.vdurmont.semver4j.SemverException
+import com.intellij.openapi.components.serviceIfCreated
+import io.github.z4kn4fein.semver.Version
+import io.github.z4kn4fein.semver.toVersionOrNull
 import org.jetbrains.annotations.TestOnly
+import org.rust.stdext.RsResult
+import java.nio.file.Path
 
 interface CratesLocalIndexService {
     /**
-     * @throws CratesLocalIndexException if index is either being updated, or PersistentHashMap has failed to
-     * initialize and not available.
      * @return [CargoRegistryCrate] if there is a crate with such [crateName], and `null` if it is not.
      */
-    @Throws(CratesLocalIndexException::class)
-    fun getCrate(crateName: String): CargoRegistryCrate?
+    fun getCrate(crateName: String): RsResult<CargoRegistryCrate?, Error>
 
     /**
-     * @throws CratesLocalIndexException if index is either being updated, or PersistentHashMap has failed to
-     * initialize and not available.
      * @return list of crate names in the index.
      */
-    @Throws(CratesLocalIndexException::class)
-    fun getAllCrateNames(): List<String>
-    fun updateIfNeeded()
+    fun getAllCrateNames(): RsResult<List<String>, Error>
+
+    sealed class Error {
+        object Updating : Error() {
+            override fun toString(): String =
+                "CratesLocalIndexService.Error.Updating(Index is being updated)"
+        }
+
+        object NotYetLoaded : Error() {
+            override fun toString(): String =
+                "CratesLocalIndexService.Error.NotYetLoaded(The index is not yet loaded)"
+        }
+
+        object Disposed : Error() {
+            override fun toString(): String =
+                "CratesLocalIndexService.Error.Disposed(The service has been disposed)"
+        }
+
+        sealed class InternalError : Error() {
+            data class NoCargoIndex(val path: Path) : InternalError()
+            data class RepoReadError(val path: Path, val message: String) : InternalError()
+            data class PersistentHashMapInitError(val path: Path, val message: String) : InternalError()
+            data class PersistentHashMapWriteError(val message: String) : InternalError()
+            data class PersistentHashMapReadError(val message: String) : InternalError()
+        }
+    }
 
     companion object {
         fun getInstance(): CratesLocalIndexService = service()
+        fun getInstanceIfCreated(): CratesLocalIndexService? = serviceIfCreated()
     }
 }
-
-class CratesLocalIndexException(message: String) : Exception(message)
 
 data class CargoRegistryCrate(val versions: List<CargoRegistryCrateVersion>) {
     val sortedVersions: List<CargoRegistryCrateVersion>
@@ -48,11 +68,10 @@ data class CargoRegistryCrate(val versions: List<CargoRegistryCrateVersion>) {
     }
 }
 
-data class CargoRegistryCrateVersion(val version: String, val isYanked: Boolean, val features: List<String>) {
-    val semanticVersion: Semver?
-        get() = try {
-            Semver(version, Semver.SemverType.NPM)
-        } catch (e: SemverException) {
-            null
-        }
+data class CargoRegistryCrateVersion(
+    val version: String,
+    val isYanked: Boolean,
+    val features: List<String>
+) {
+    val semanticVersion: Version? get() = version.toVersionOrNull()
 }
