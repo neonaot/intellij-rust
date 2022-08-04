@@ -1,3 +1,4 @@
+#![feature(once_cell)]
 //! An "interner" is a data structure that associates values with usize tags and
 //! allows bidirectional lookup; i.e., given a value, one can easily find the
 //! type, and vice versa.
@@ -14,7 +15,7 @@ include!(concat!(env!("OUT_DIR"), "/symbol.rs"));
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Symbol(pub u32);
 
-static INTERNER: SyncLazy<Interner> = SyncLazy::new(|| Interner::fresh());
+static INTERNER: LazyLock<Interner> = LazyLock::new(|| Interner::fresh());
 
 impl Symbol {
     const fn new(n: u32) -> Self {
@@ -75,3 +76,5 @@ pub mod sym {
     // Used from a macro in `librustc_feature/accepted.rs`
     pub use super::kw::MacroRules as macro_rules;
 }
+
+fn main() {}
