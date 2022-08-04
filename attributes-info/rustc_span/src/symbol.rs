@@ -1,3 +1,4 @@
+#![feature(once_cell)]
 //! An "interner" is a data structure that associates values with usize tags and
 //! allows bidirectional lookup; i.e., given a value, one can easily find the
 //! type, and vice versa.
@@ -74,3 +75,5 @@ pub mod sym {
     // Used from a macro in `librustc_feature/accepted.rs`
     pub use super::kw::MacroRules as macro_rules;
 }
+
+fn main() {}
