@@ -5,7 +5,8 @@
 use std::cmp::PartialEq;
 use std::fmt;
 use std::hash::Hash;
-use std::lazy::SyncLazy;
+// use std::lazy::SyncLazy; try to replace it with new name:
+use std::sync::LazyLock;
 use std::str;
 
 include!(concat!(env!("OUT_DIR"), "/symbol.rs"));
