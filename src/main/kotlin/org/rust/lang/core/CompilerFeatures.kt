@@ -332,7 +332,7 @@ val YEET_EXPR = CompilerFeature("yeet_expr", ACTIVE, "1.62.0")
 // Removed features
 val ADVANCED_SLICE_PATTERNS = CompilerFeature("advanced_slice_patterns", REMOVED, "1.0.0")
 val ALLOCATOR = CompilerFeature("allocator", REMOVED, "1.0.0")
-val ALLOW_FAIL = CompilerFeature("allow_fail", REMOVED, "1.19.0")
+val ALLOW_FAIL = CompilerFeature("allow_fail", REMOVED, "1.56.0")
 val AWAIT_MACRO = CompilerFeature("await_macro", REMOVED, "1.38.0")
 val CONST_COMPARE_RAW_POINTERS = CompilerFeature("const_compare_raw_pointers", REMOVED, "1.46.0")
 val CONST_EVALUATABLE_CHECKED = CompilerFeature("const_evaluatable_checked", REMOVED, "1.48.0")
