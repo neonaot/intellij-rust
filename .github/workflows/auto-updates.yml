@@ -26,8 +26,8 @@ jobs:
               with:
                   token: ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
 
-#            - name: Prepare for updates
-#              uses: ./.github/actions/preparations-for-updates
+            - name: Prepare for updates
+              uses: ./.github/actions/preparations-for-updates
 
             - name: Update testing
               run: python scripts/update_testing.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}

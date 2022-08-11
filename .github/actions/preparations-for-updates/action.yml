@@ -4,13 +4,13 @@ description: prepare environment for jobs from `auto-updates` workflow
 runs:
     using: composite
     steps:
-        - name: Set up nightly Rust
-          uses: actions-rs/toolchain@v1
-          with:
-              profile: minimal
-              toolchain: nightly
-              components: rust-src, rustfmt, clippy # should be synchronized with `check` workflow
-              default: true
+#        - name: Set up nightly Rust
+#          uses: actions-rs/toolchain@v1
+#          with:
+#              profile: minimal
+#              toolchain: nightly
+##              components: rust-src, rustfmt, clippy # should be synchronized with `check` workflow
+#              default: true
 
         - name: Set up Python
           uses: actions/setup-python@v3
