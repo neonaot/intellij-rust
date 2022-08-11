@@ -6,9 +6,10 @@ from updater import UpdaterBase
 
 class testcommitUpdater(UpdaterBase):
     def _update_locally(self) -> None:
-        file = open('testfile.txt', 'w')
+        file = open('scripts/testfile.txt', 'w')
         file.write("hello")
         file.close()
+        print("add something to file")
 
 
 def main():
