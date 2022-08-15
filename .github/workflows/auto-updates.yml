@@ -40,7 +40,9 @@ jobs:
                     token: ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
 
             -   name: Prepare for updates
-                uses: ./.github/actions/preparations-for-updates --nightly false
+                uses: ./.github/actions/preparations-for-updates
+                with:
+                    nightly: false
 
             -   name: Update stable
                 run: python scripts/update_stable.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
