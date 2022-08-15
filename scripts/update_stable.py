@@ -9,11 +9,11 @@ RUSTC_VERSION_RE = re.compile(r".* \(\w*\s*(\d{4}-\d{2}-\d{2})\)")
 WORKFLOW_RUSTC_VERSION_RE = re.compile(r"(rust-version: \[.*nightly-)\d{4}-\d{2}-\d{2}(.*])")
 
 
-class NightlyUpdater(UpdaterBase):
+class StableUpdater(UpdaterBase):
 
     def _update_locally(self):
         output = execute_command("rustc", "-V")
-        print("nightly version is" + output)
+        print("stable version is " + output)
         match_result = RUSTC_VERSION_RE.match(output)
         date = match_result.group(1)
         with open(CHECK_WORKFLOW_PATH) as f:
@@ -32,6 +32,7 @@ class NightlyUpdater(UpdaterBase):
             f.write(new_workflow_text)
 
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--token", type=str, required=True, help="github token")
@@ -39,7 +40,7 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = NightlyUpdater(repo, args.token, branch_name="nightly", message=":arrow_up: nightly", assignee="neonaot")
+    updater = StableUpdater(repo, args.token, branch_name="stable", message=":arrow_up: stable", assignee="neonaot")
     updater.update()
 
 
