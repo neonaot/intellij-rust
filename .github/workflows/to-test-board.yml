@@ -1,0 +1,26 @@
+name: test board
+
+on:
+    pull_request_target:
+        types: [ labeled, closed]
+
+jobs:
+    notify-docteam:
+        if: |
+            (github.event.action == 'closed' && github.event.pull_request.merged && (contains(github.event.pull_request.labels.*.name, 'fix') ||(contains(github.event.pull_request.labels.*.name, 'feature')))) ||
+            ((github.event.label.name == 'fix' || github.event.label.name == 'feature') && github.event.pull_request.merged)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo content
+              uses: actions/checkout@v2
+
+            - name: Setup python
+              uses: actions/setup-python@v2
+              with:
+                  python-version: 3.9
+
+            - name: Install python packages
+              run: pip install -r scripts/requirements.txt
+
+            - name: Add to board
+              run: python scripts/add_to_board.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }} --pull_request ${{ github.event.pull_request.number }}
