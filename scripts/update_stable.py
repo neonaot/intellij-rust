@@ -5,32 +5,26 @@ from common import execute_command, env
 from updater import UpdaterBase
 
 CHECK_WORKFLOW_PATH = ".github/workflows/check.yml"
-RUSTC_VERSION_RE = re.compile(r".* \(\w*\s*(\d{4}-\d{2}-\d{2})\)")
-WORKFLOW_RUSTC_VERSION_RE = re.compile(r"(rust-version: \[.*nightly-)\d{4}-\d{2}-\d{2}(.*])")
+RUSTC_STABLE_VERSION_RE = re.compile(r"[0-9][.][0-9]{2}[.][0-9]")
+WORKFLOW_RUSTC_STABLE_VERSION_RE = re.compile(r"RUST_STABLE_VERSION: ([0-9][.][0-9]{2}[.][0-9])")
 
 
 class StableUpdater(UpdaterBase):
-
     def _update_locally(self):
+        execute_command("rustup", "default", "stable")
         output = execute_command("rustc", "-V")
-        print("stable version is " + output)
-        match_result = RUSTC_VERSION_RE.match(output)
-        date = match_result.group(1)
+        version = RUSTC_STABLE_VERSION_RE.search(output).group(0)
+
         with open(CHECK_WORKFLOW_PATH) as f:
             workflow_text = f.read()
 
-        result = re.search(WORKFLOW_RUSTC_VERSION_RE, workflow_text)
+        result = re.search(WORKFLOW_RUSTC_STABLE_VERSION_RE, workflow_text)
         if result is None:
-            raise ValueError("Failed to find the current version of nightly rust")
+            raise ValueError("Failed to find the current version of stable rust")
 
-        new_workflow_text = re.sub(WORKFLOW_RUSTC_VERSION_RE, f"\\g<1>{date}\\g<2>", workflow_text)
-        if new_workflow_text == workflow_text:
-            print("The latest nightly rustc version is already used")
-            return
-
+        new_workflow_text = workflow_text.replace(result.group(1), version)
         with open(CHECK_WORKFLOW_PATH, "w") as f:
             f.write(new_workflow_text)
-
 
 
 def main():
@@ -40,7 +34,7 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = StableUpdater(repo, args.token, branch_name="stable", message=":arrow_up: stable", assignee="neonaot")
+    updater = StableUpdater(repo, args.token, branch_name="stable-neonaot", message=":arrow_up: stable", assignee="neonaot")
     updater.update()
 
 
