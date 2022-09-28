@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
     calculate-git-info:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-latest
         outputs:
             is_bors_branch: ${{ steps.calculate-git-info.outputs.is_bors_branch }}
             is_master_branch: ${{ steps.calculate-git-info.outputs.is_master_branch }}
@@ -50,12 +50,12 @@ jobs:
                   echo "checked: ${{ steps.calculate-git-info.outputs.checked }}"
 
     check-license:
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v2
 
             - name: Check license
-              run: ./check-license.sh
+              run: python scripts/check_license.py
 
     build-native-code:
         needs: [ calculate-git-info ]
@@ -75,19 +75,19 @@ jobs:
             # `fromJSON` is used here to convert string output to boolean
             fail-fast: ${{ fromJSON(needs.calculate-git-info.outputs.is_bors_branch) }}
             matrix:
-                os: [ ubuntu-18.04, windows-latest ]
+                os: [ ubuntu-latest, windows-latest ]
                 rust-version: [ env.RUST_STABLE_VERSION, nightly-2022-08-27 ]
                 base-ide: [ idea, clion ]
-                platform-version: [ 221, 222 ]
+                platform-version: [ 222 ]
                 # it's enough to verify plugin structure only once per platform version
                 verify-plugin: [ false ]
                 default-edition-for-tests: [ 2021 ]
                 include:
-                    - os: ubuntu-18.04
+                    - os: ubuntu-latest
                       # Don't forget to update condition in `Set up additional env variables` step
                       rust-version: 1.41.0
                       base-ide: idea
-                      platform-version: 221
+                      platform-version: 222
                       verify-plugin: true
                       # BACKCOMPAT: 2021 edition needs at least 1.56
                       default-edition-for-tests: 2018
@@ -145,7 +145,7 @@ jobs:
               uses: actions-rs/cargo@v1
               with:
                   command: install
-                  args: evcxr_repl --locked
+                  args: evcxr_repl --locked --version 0.13.0
 
             - name: Install cargo-generate
               # BACKCOMPAT: cargo-generate 0.15.2 requires Rust 1.61.0 or newer
@@ -167,7 +167,7 @@ jobs:
               run: |
                   echo "ORG_GRADLE_PROJECT_ideaVersion=IU-2022.1" >> $GITHUB_ENV
                   echo "ORG_GRADLE_PROJECT_clionVersion=CL-2022.1" >> $GITHUB_ENV
-                  echo "ORG_GRADLE_PROJECT_nativeDebugPluginVersion=221.5080.97" >> $GITHUB_ENV
+                  echo "ORG_GRADLE_PROJECT_nativeDebugPluginVersion=222.3345.48" >> $GITHUB_ENV
 
             - name: Set up test env variables
               run: echo "RUST_SRC_WITH_SYMLINK=$HOME/.rust-src" >> $GITHUB_ENV
@@ -221,7 +221,7 @@ jobs:
 
     check:
         needs: [ check-license, check-plugin ]
-        runs-on: ubuntu-18.04
+        runs-on: ubuntu-latest
         steps:
             - name: Finish check
               run: echo "Check finished successfully!"
