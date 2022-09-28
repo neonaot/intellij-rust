@@ -22,7 +22,7 @@ concurrency:
     cancel-in-progress: true
 
 env:
-    RUST_STABLE_VERSION: "1.63.0"
+    RUST_STABLE_VERSION: 1.63.0
 
 jobs:
     calculate-git-info:
