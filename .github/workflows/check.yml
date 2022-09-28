@@ -15,14 +15,14 @@ on:
     schedule:
         -   cron: '0 3 * * *'
 
-env:
-    RUST_STABLE_VERSION: "1.63.0"
-
 # Allow cancelling all previous runs for the same branch
 # See https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
+
+env:
+    RUST_STABLE_VERSION: "1.63.0"
 
 jobs:
     calculate-git-info:
@@ -67,7 +67,7 @@ jobs:
         if: ${{ github.event_name == 'schedule' || !fromJSON(needs.calculate-git-info.outputs.is_master_branch) || !fromJSON(needs.calculate-git-info.outputs.checked) }}
         uses: ./.github/workflows/build-native-code.yml
         with:
-            rust-version: "${{ RUST_STABLE_VERSION }}"
+            rust-version: env.RUST_STABLE_VERSION
             cache: true
 
     check-plugin:
