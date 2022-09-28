@@ -13,6 +13,7 @@ class NightlyUpdater(UpdaterBase):
 
     def _update_locally(self):
         output = execute_command("rustc", "-V")
+        print("nightly version is" + output)
         match_result = RUSTC_VERSION_RE.match(output)
         date = match_result.group(1)
         with open(CHECK_WORKFLOW_PATH) as f:
@@ -38,7 +39,7 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = NightlyUpdater(repo, args.token, branch_name="nightly", message=":arrow_up: nightly", assignee="Undin")
+    updater = NightlyUpdater(repo, args.token, branch_name="nightly-neonaot", message=":arrow_up: nightly", assignee="neonaot")
     updater.update()
 
 
