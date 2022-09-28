@@ -1,7 +1,5 @@
 name: check
 
-env:
-    RUST_STABLE_VERSION: 1.63.0
 
 
 on:
@@ -16,6 +14,9 @@ on:
     # to get more details about cache access
     schedule:
         -   cron: '0 3 * * *'
+
+env:
+    RUST_STABLE_VERSION: 1.63.0
 
 # Allow cancelling all previous runs for the same branch
 # See https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency
