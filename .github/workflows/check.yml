@@ -67,7 +67,7 @@ jobs:
         if: ${{ github.event_name == 'schedule' || !fromJSON(needs.calculate-git-info.outputs.is_master_branch) || !fromJSON(needs.calculate-git-info.outputs.checked) }}
         uses: ./.github/workflows/build-native-code.yml
         with:
-            rust-version: echo "${{ env.RUST_STABLE_VERSION }}"
+            rust-version: echo "${{ RUST_STABLE_VERSION }}"
             cache: true
 
     check-plugin:
