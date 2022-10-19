@@ -12,6 +12,8 @@ jobs:
         steps:
             - run: echo ${{ needs.outputs.stable-version }}
             - run: echo ${{ needs.outputs.nightly-version }}
+            - run: echo "${{ needs.outputs.nightly-version }}"
+            - run: echo hello
 
 
 #    - run: echo ${{ needs.job1.outputs.firstword }} ${{ needs.job1.outputs.secondword }}
