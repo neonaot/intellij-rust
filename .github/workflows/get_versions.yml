@@ -1,6 +1,7 @@
 name: get rust versions
 on:
     workflow_call:
+    workflow_dispatch:
 
 jobs:
     get_versions:
