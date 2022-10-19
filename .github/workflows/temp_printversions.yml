@@ -8,10 +8,10 @@ jobs:
 
     print:
         runs-on: ubuntu-latest
-        needs: run_getter.outputs
+        needs: run_getter
         steps:
-            - run: echo ${{ needs.stable-version }}
-            - run: echo ${{ needs.nightly-version }}
+            - run: echo ${{ needs.outputs.stable-version }}
+            - run: echo ${{ needs.outputs.nightly-version }}
 
 
 #    - run: echo ${{ needs.job1.outputs.firstword }} ${{ needs.job1.outputs.secondword }}
