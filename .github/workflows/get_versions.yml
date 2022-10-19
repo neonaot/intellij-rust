@@ -3,9 +3,9 @@ on:
     workflow_call:
         outputs:
             stable-version:
-                value: ${{ jobs.get-versions.outputs.stable-version}}
+                value: ${{ jobs.get_versions.outputs.stable-version}}
             nightly-version:
-                value: ${{ jobs.get-versions.outputs.nightly-version}}
+                value: ${{ jobs.get_versions.outputs.nightly-version}}
     workflow_dispatch:
 
 jobs:
