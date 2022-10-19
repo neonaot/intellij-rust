@@ -1,0 +1,14 @@
+name: get rust versions
+on:
+    workflow_call:
+
+jobs:
+    get_versions:
+        outputs:
+            stable-version: ${{ steps.stable.outputs.stable-version}}
+            nightly-version: ${{ steps.nightly.outputs.nightly-version}}
+        steps:
+              - id: stable
+                run: echo "stable-version=1.64.0" >> $GITHUB_OUTPUT
+              - id: nightly
+                run: echo "nightly-version=nightly-2022-08-27" >> $GITHUB_OUTPUT
