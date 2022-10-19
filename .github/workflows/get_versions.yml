@@ -5,6 +5,7 @@ on:
 
 jobs:
     get_versions:
+        runs-on: ubuntu-latest
         outputs:
             stable-version: ${{ steps.stable.outputs.stable-version}}
             nightly-version: ${{ steps.nightly.outputs.nightly-version}}
