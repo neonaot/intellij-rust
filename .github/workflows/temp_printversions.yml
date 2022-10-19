@@ -10,7 +10,7 @@ jobs:
         runs-on: ubuntu-latest
         needs: run_getter
         steps:
-            - run: echo ${{ needs.run_getter.outputs.stable-version }}
+            - run: echo "${{ needs.run_getter.outputs.stable-version }} hello"
 
 
 #    - run: echo ${{ needs.job1.outputs.firstword }} ${{ needs.job1.outputs.secondword }}
