@@ -13,7 +13,7 @@ on:
                 value: ${{ jobs.get_versions.outputs.nightly-version}}
             matrix-version:
                 value: ${{ jobs.get_versions.outputs.matrix-version}}
-                type: Sequence
+
 
 jobs:
     get_versions:
