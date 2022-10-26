@@ -77,8 +77,6 @@ jobs:
             matrix:
                 os: [ ubuntu-latest, windows-latest ]
                 rust-version: ${{ fromJSON(needs.get-rust-versions.outputs.matrix-version) }}
-#                rust-version: [  1.64.0, nightly-2022-08-27]
-#                rust-version: [  ${{ needs.get-rust-versions.outputs.stable-version }},  ${{ needs.get-rust-versions.outputs.nightly-version }} ]
                 base-ide: [ idea, clion ]
                 platform-version: [ 222 ]
                 # it's enough to verify plugin structure only once per platform version
