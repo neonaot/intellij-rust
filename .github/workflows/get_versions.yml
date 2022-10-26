@@ -30,4 +30,4 @@ jobs:
                 run: echo "nightly-version=nightly-2022-08-27" >> $GITHUB_OUTPUT
               - name: matrix version
                 id: matrix
-                run: echo "matrix-version="[${{steps.stable.outputs.stable-version, steps.nightly.outputs.nightly-version}}]"" >> $GITHUB_OUTPUT
+                run: echo "matrix-version=[${{steps.stable.outputs.stable-version}}, ${{steps.nightly.outputs.nightly-version}}]" >> $GITHUB_OUTPUT
