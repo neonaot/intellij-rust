@@ -16,8 +16,8 @@ jobs:
             - run: echo "${{ needs.run_getter.outputs.matrix-version }}"
             - run: echo "1.41.0 == ${{needs.run_getter.outputs.old-version}}"
             - run: echo ""1.41.1" == ${{needs.run_getter.outputs.old-version}}"
-            - run: echo "${{1.41.0 == ${{needs.run_getter.outputs.old-version}}}}"
-            - run: echo "${{1.41.0 == needs.run_getter.outputs.old-version}}"
+#            - run: echo "${{1.41.0 == ${{needs.run_getter.outputs.old-version}}}}"
+            - run: echo "${{"1.41.0" == needs.run_getter.outputs.old-version}}"
 
 
 #    - run: echo ${{ needs.job1.outputs.firstword }} ${{ needs.job1.outputs.secondword }}
