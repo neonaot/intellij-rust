@@ -76,6 +76,9 @@ jobs:
             fail-fast: ${{ fromJSON(needs.calculate-git-info.outputs.is_bors_branch) }}
             matrix:
                 os: [ ubuntu-latest, windows-latest ]
+                # `fromJSON` is used here to convert string output to sequence.
+                # `matrix-version` is a string with list of stable + nightly versions.
+                # Make sequence from two outputs with version is not possible here.
                 rust-version: ${{ fromJSON(needs.get-rust-versions.outputs.matrix-version) }}
                 base-ide: [ idea, clion ]
                 platform-version: [ 222 ]
@@ -85,7 +88,7 @@ jobs:
                 include:
                     - os: ubuntu-latest
                       # Don't forget to update condition in `Set up additional env variables` step
-                      rust-version: 1.41.0
+                      rust-version: ${{needs.get-rust-versions.outputs.old-version}}
                       base-ide: idea
                       platform-version: 222
                       verify-plugin: true
@@ -162,7 +165,7 @@ jobs:
                   cargo install --list
 
             - name: Set up additional env variables
-              if: matrix.rust-version == '1.41.0'
+              if: matrix.rust-version == ${{needs.get-rust-versions.outputs.old-version}}
               # see https://help.github.com/en/actions/reference/workflow-commands-for-github-actions#setting-an-environment-variable
               run: |
                   echo "ORG_GRADLE_PROJECT_ideaVersion=IU-2022.1" >> $GITHUB_ENV

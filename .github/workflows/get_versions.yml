@@ -1,6 +1,6 @@
 #    This workflow exists to avoid using hardcoded versions of the toolchain in different files.
-#        In an ideal world, top-level constants (not yet invented) or workflow-level environment variables
-#        would be used, but they are not supported in all needed places.
+#    In an ideal world, top-level constants (not yet implemented) or workflow-level environment variables
+#    would be used, but they are not supported in all needed places.
 
 name: get rust versions
 on:
