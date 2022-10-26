@@ -76,7 +76,7 @@ jobs:
             fail-fast: ${{ fromJSON(needs.calculate-git-info.outputs.is_bors_branch) }}
             matrix:
                 os: [ ubuntu-latest, windows-latest ]
-                rust-version: ${{ needs.get-rust-versions.outputs.matrix-version }}
+                rust-version: ${{ fromJSON(needs.get-rust-versions.outputs.matrix-version) }}
 #                rust-version: [  1.64.0, nightly-2022-08-27]
 #                rust-version: [  ${{ needs.get-rust-versions.outputs.stable-version }},  ${{ needs.get-rust-versions.outputs.nightly-version }} ]
                 base-ide: [ idea, clion ]
