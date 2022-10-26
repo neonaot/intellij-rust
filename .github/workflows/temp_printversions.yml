@@ -14,7 +14,10 @@ jobs:
             - run: echo ${{ needs.run_getter.outputs.nightly-version }}
             - run: echo "${{ needs.run_getter.outputs.nightly-version }}"
             - run: echo "${{ needs.run_getter.outputs.matrix-version }}"
-            - run: echo hello
+            - run: echo "matrix.rust-version == ${{needs.get-rust-versions.outputs.old-version}}"
+            - run: echo "matrix.rust-version = ${{needs.get-rust-versions.outputs.old-version}}"
+            - run: echo "${{matrix.rust-version = ${{needs.get-rust-versions.outputs.old-version}}}}"
+            - run: echo "${{matrix.rust-version == needs.get-rust-versions.outputs.old-version}}"
 
 
 #    - run: echo ${{ needs.job1.outputs.firstword }} ${{ needs.job1.outputs.secondword }}
