@@ -4,7 +4,7 @@ import re
 from common import execute_command, env
 from updater import UpdaterBase
 
-CHECK_WORKFLOW_PATH = ".github/workflows/get-versions.yml.yml"
+CHECK_WORKFLOW_PATH = ".github/workflows/get-versions.yml"
 RUSTC_VERSION_RE = re.compile(r".* \(\w*\s*(\d{4}-\d{2}-\d{2})\)")
 WORKFLOW_RUSTC_VERSION_RE = re.compile(r'(?<=NIGHTLY: "nightly-)\d{4}-\d{2}-\d{2}')
 
