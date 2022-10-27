@@ -1,4 +1,4 @@
-#    This workflow exists to avoid using hardcoded versions of the toolchain in different files.
+#    This workflow exists to avoid using hardcoded versions of the toolchain in different places.
 #    In an ideal world, top-level constants (not yet implemented) or workflow-level environment variables
 #    would be used, but they are not supported in all needed places.
 
@@ -7,15 +7,15 @@ on:
     workflow_call:
         outputs:
             stable-version:
-                value: ${{ jobs.get_versions.outputs.stable-version}}
+                value: ${{ jobs.get_versions.outputs.stable-version }}
             nightly-version:
-                value: ${{ jobs.get_versions.outputs.nightly-version}}
+                value: ${{ jobs.get_versions.outputs.nightly-version }}
             old-version:
-                value: ${{ jobs.get_versions.outputs.old-version}}
+                value: ${{ jobs.get_versions.outputs.old-version }}
             matrix-version:
-                description: 'String like ["1.64.0", "nightly-2022-13-13"].
-                         Added for `check` workflow, there is no way to make a sequence from two outputs.'
-                value: ${{ jobs.get_versions.outputs.matrix-version}}
+                description: 'String like ["%stable%", "%nightly-yyyy-mm-dd%"].
+                         Added for `check` workflow, because there is no way to make a sequence from two outputs.'
+                value: ${{ jobs.get_versions.outputs.matrix-version }}
 
 env:
    STABLE: "1.64.0"
@@ -26,21 +26,21 @@ jobs:
     get_versions:
         runs-on: ubuntu-latest
         outputs:
-            stable-version: ${{ steps.stable.outputs.stable-version}}
-            nightly-version: ${{ steps.nightly.outputs.nightly-version}}
-            old-version: ${{ steps.old.outputs.old-version}}
-            matrix-version: ${{ steps.matrix.outputs.matrix-version}}
+            stable-version: ${{ steps.stable.outputs.stable-version }}
+            nightly-version: ${{ steps.nightly.outputs.nightly-version }}
+            old-version: ${{ steps.old.outputs.old-version }}
+            matrix-version: ${{ steps.matrix.outputs.matrix-version }}
         steps:
               - name: stable version
                 id: stable
-                run: echo "stable-version=${{env.STABLE}}" >> $GITHUB_OUTPUT
+                run: echo "stable-version=${{ env.STABLE }}" >> $GITHUB_OUTPUT
               - name: nightly version
                 id: nightly
-                run: echo "nightly-version=${{env.NIGHTLY}}" >> $GITHUB_OUTPUT
+                run: echo "nightly-version=${{ env.NIGHTLY }}" >> $GITHUB_OUTPUT
               - name: old version
                 id: old
-                run: echo "old-version=${{env.OLD}}" >> $GITHUB_OUTPUT
+                run: echo "old-version=${{ env.OLD }}" >> $GITHUB_OUTPUT
               - name: matrix version
                 id: matrix
-                run: echo "matrix-version=[\"${{steps.stable.outputs.stable-version}}\", \"${{steps.nightly.outputs.nightly-version}}\"]" >> $GITHUB_OUTPUT
+                run: echo "matrix-version=[\"${{ env.STABLE }}\", \"${{ env.NIGHTLY }}\"]" >> $GITHUB_OUTPUT
 
