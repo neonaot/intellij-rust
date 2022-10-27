@@ -17,6 +17,8 @@ class NightlyUpdater(UpdaterBase):
         with open(CHECK_WORKFLOW_PATH) as f:
             workflow_text = f.read()
 
+        print(workflow_text)
+        print(output)
         result = re.search(WORKFLOW_RUSTC_VERSION_RE, workflow_text)
         if result is None:
             raise ValueError("Failed to find the current version of nightly rust")

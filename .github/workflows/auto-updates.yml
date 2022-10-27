@@ -31,19 +31,3 @@ jobs:
 
             -   name: Update compiler features
                 run: python scripts/update_compiler_features.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
-
-    update-stable:
-        runs-on: ubuntu-latest
-        steps:
-            -   uses: actions/checkout@v2
-                with:
-                    token: ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
-
-            -   name: Prepare for updates
-                uses: ./.github/actions/preparations-for-updates
-                with:
-                    nightly: false
-
-            -   name: Update stable
-                run: python scripts/update_stable.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
-
