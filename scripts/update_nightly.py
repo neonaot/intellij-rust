@@ -6,14 +6,12 @@ from updater import UpdaterBase
 
 CHECK_WORKFLOW_PATH = ".github/workflows/check.yml"
 RUSTC_VERSION_RE = re.compile(r".* \(\w*\s*(\d{4}-\d{2}-\d{2})\)")
-WORKFLOW_RUSTC_VERSION_RE = re.compile(r"(rust-version: \[.*nightly-)\d{4}-\d{2}-\d{2}(.*])")
+WORKFLOW_RUSTC_VERSION_RE = re.compile(r'(?<=NIGHTLY: "nightly-)\d{4}-\d{2}-\d{2}')
 
 
 class NightlyUpdater(UpdaterBase):
-
     def _update_locally(self):
         output = execute_command("rustc", "-V")
-        print("nightly version is" + output)
         match_result = RUSTC_VERSION_RE.match(output)
         date = match_result.group(1)
         with open(CHECK_WORKFLOW_PATH) as f:
@@ -23,7 +21,7 @@ class NightlyUpdater(UpdaterBase):
         if result is None:
             raise ValueError("Failed to find the current version of nightly rust")
 
-        new_workflow_text = re.sub(WORKFLOW_RUSTC_VERSION_RE, f"\\g<1>{date}\\g<2>", workflow_text)
+        new_workflow_text = re.sub(WORKFLOW_RUSTC_VERSION_RE, date, workflow_text)
         if new_workflow_text == workflow_text:
             print("The latest nightly rustc version is already used")
             return

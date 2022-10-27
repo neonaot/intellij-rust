@@ -4,7 +4,7 @@ on:
 
 jobs:
     run_getter:
-         uses: ./.github/workflows/get_versions.yml
+         uses: ./.github/workflows/get-versions.yml
 
     print:
         runs-on: ubuntu-latest

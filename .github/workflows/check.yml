@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
     get-rust-versions:
-        uses: ./.github/workflows/get_versions.yml
+        uses: ./.github/workflows/get-versions.yml
 
     calculate-git-info:
         runs-on: ubuntu-latest
