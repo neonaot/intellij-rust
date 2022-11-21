@@ -38,7 +38,8 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = NightlyUpdater(repo, args.token, branch_name="nightly", message=":arrow_up: nightly", assignee="Undin")
+    # TODO
+    updater = NightlyUpdater(repo, args.token, branch_name="nightly-neonaot-test", message=":arrow_up: nightly", assignee="neonaot")
     updater.update()
 
 
