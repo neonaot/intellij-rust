@@ -13,15 +13,16 @@ class StableUpdater(UpdaterBase):
 
     def _update_locally(self):
         execute_command("rustup", "default", "stable")
+        execute_command("rustup", "update")
+
         output = execute_command("rustc", "-V")
         match_result = RUSTC_VERSION_RE.search(output)
+
         version = match_result.group(0)
-        print(version)  # TODO
         with open(WORKFLOW_PATH) as f:
             workflow_text = f.read()
 
         result = re.search(WORKFLOW_RUSTC_VERSION_RE, workflow_text)
-        print(result)  # TODO
         if result is None:
             raise ValueError("Failed to find the current version of stable rust")
 
