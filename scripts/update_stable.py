@@ -6,7 +6,7 @@ from updater import UpdaterBase
 
 WORKFLOW_PATH = ".github/workflows/get-rust-versions.yml"
 RUSTC_VERSION_RE = re.compile(r"[0-9][.][0-9]{2}[.][0-9]")
-WORKFLOW_RUSTC_VERSION_RE = re.compile(r'STABLE: "([0-9][.][0-9]{2}[.][0-9])"')
+WORKFLOW_RUSTC_VERSION_RE = re.compile(r'(?<=STABLE: ")([0-9][.][0-9]{2}[.][0-9])')
 
 
 class StableUpdater(UpdaterBase):
