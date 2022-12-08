@@ -19,9 +19,9 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = CompilerFeatureUpdater(repo, args.token, branch_name="update-compiler-features",
+    updater = CompilerFeatureUpdater(repo, args.token, branch_name="update-compiler-features-neonaot",
                                      message="Update compiler features",
-                                     assignee="Undin")
+                                     assignee="neonaot")
     updater.update()
 
 
