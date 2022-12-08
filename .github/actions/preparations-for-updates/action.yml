@@ -12,11 +12,11 @@ runs:
               components: rust-src, rustfmt, clippy # should be synchronized with `check` workflow
               default: true
 
-        -   name: Install minimal stable
-            uses: actions-rs/toolchain@v1
-            with:
-                profile: minimal
-                toolchain: stable
+#        -   name: Install minimal stable
+#            uses: actions-rs/toolchain@v1
+#            with:
+#                profile: minimal
+#                toolchain: stable
 
 
         - name: Set up git user
