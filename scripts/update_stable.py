@@ -43,7 +43,7 @@ def main():
 
     repo = env("GITHUB_REPOSITORY")
 
-    updater = StableUpdater(repo, args.token, branch_name="stable", message=":arrow_up: stable", assignee="neonaot")
+    updater = StableUpdater(repo, args.token, branch_name="stable-neonaot", message=":arrow_up: stable", assignee="neonaot")
     updater.update()
 
 
