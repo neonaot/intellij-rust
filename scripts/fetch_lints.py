@@ -90,7 +90,7 @@ val RUSTC_LINTS: List<Lint> = listOf(
 """  # dont forget ')'
 
         lints = get_rustc_lints()
-        lints.sort()
+        lints.sort(key=lambda item: (not item[1], item[0]))
 
         text = ""
         for i in lints:
@@ -108,7 +108,7 @@ package org.rust.lang.core.completion.lint
 
 val CLIPPY_LINTS: List<Lint> = listOf("""
         lints = get_clippy_lints()
-        lints.sort()
+        lints.sort(key=lambda item: (not item[1], item[0]))
 
         text = ""
         for i in lints:
