@@ -15,7 +15,8 @@ You need to have `rustc` and `git` available in $PATH for it to work.
 """
 
 DIR = os.path.dirname(os.path.abspath(__name__))
-LINTS_LIST_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/RustcLints.kt"
+RUSTC_LINTS_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/RustcLints.kt"
+CLIPPY_LINTS_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/ClippyLints.kt"
 
 
 class LintParsingMode:
@@ -78,7 +79,7 @@ def get_clippy_lints():
 class LintsUpdater(UpdaterBase):
 
     def _update_locally(self):
-        hardcoded_part = """/*
+        hardcoded_part_rustc = """/*
  * Use of this source code is governed by the MIT license that can be
  * found in the LICENSE file.
  */
@@ -93,10 +94,28 @@ val RUSTC_LINTS: List<Lint> = listOf(
 
         text = ""
         for i in lints:
-            text += "\tLint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
+            text += "    Lint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
 
-        with open(LINTS_LIST_PATH, "w") as f:
-            f.write(hardcoded_part + text + ")")
+        with open(RUSTC_LINTS_PATH, "w") as f:
+            f.write(hardcoded_part_rustc + text + ")")
+
+        hardcoded_part_clippy = """/*
+ * Use of this source code is governed by the MIT license that can be
+ * found in the LICENSE file.
+ */
+
+package org.rust.lang.core.completion.lint
+
+val CLIPPY_LINTS: List<Lint> = listOf("""
+        lints = get_clippy_lints()
+        lints.sort()
+
+        text = ""
+        for i in lints:
+            text += "    Lint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
+
+        with open(CLIPPY_LINTS_PATH, "w") as f:
+            f.write(hardcoded_part_clippy + text + ")")
 
 
 def main():
