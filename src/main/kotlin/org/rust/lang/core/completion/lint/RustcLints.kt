@@ -6,6 +6,13 @@
 package org.rust.lang.core.completion.lint
 
 val RUSTC_LINTS: List<Lint> = listOf(
+    Lint("future_incompatible", true),
+    Lint("nonstandard_style", true),
+    Lint("rust_2018_compatibility", true),
+    Lint("rust_2018_idioms", true),
+    Lint("rust_2021_compatibility", true),
+    Lint("unused", true),
+    Lint("warnings", true),
     Lint("absolute_paths_not_starting_with_crate", false),
     Lint("ambiguous_associated_items", false),
     Lint("anonymous_parameters", false),
@@ -42,7 +49,6 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("exported_private_dependencies", false),
     Lint("forbidden_lint_groups", false),
     Lint("function_item_references", false),
-    Lint("future_incompatible", true),
     Lint("fuzzy_provenance_casts", false),
     Lint("ill_formed_attribute_input", false),
     Lint("illegal_floating_point_literal_pattern", false),
@@ -85,7 +91,6 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("non_shorthand_field_patterns", false),
     Lint("non_snake_case", false),
     Lint("non_upper_case_globals", false),
-    Lint("nonstandard_style", true),
     Lint("nontrivial_structural_match", false),
     Lint("noop_method_call", false),
     Lint("order_dependent_trait_objects", false),
@@ -100,9 +105,6 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("pub_use_of_private_extern_crate", false),
     Lint("redundant_semicolons", false),
     Lint("renamed_and_removed_lints", false),
-    Lint("rust_2018_compatibility", true),
-    Lint("rust_2018_idioms", true),
-    Lint("rust_2021_compatibility", true),
     Lint("rust_2021_incompatible_closure_captures", false),
     Lint("rust_2021_incompatible_or_patterns", false),
     Lint("rust_2021_prefixes_incompatible_syntax", false),
@@ -139,7 +141,6 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("unstable_features", false),
     Lint("unstable_name_collisions", false),
     Lint("unsupported_calling_conventions", false),
-    Lint("unused", true),
     Lint("unused_allocation", false),
     Lint("unused_assignments", false),
     Lint("unused_attributes", false),
@@ -165,7 +166,6 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("useless_deprecated", false),
     Lint("variant_size_differences", false),
     Lint("warnings", false),
-    Lint("warnings", true),
     Lint("where_clauses_object_safety", false),
     Lint("while_true", false)
 )
