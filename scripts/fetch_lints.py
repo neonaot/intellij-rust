@@ -89,6 +89,8 @@ val RUSTC_LINTS: List<Lint> = listOf(
 """  # dont forget ')'
 
         lints = get_rustc_lints()
+        lints.sort()
+
         text = ""
         for i in lints:
             text += "\tLint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
