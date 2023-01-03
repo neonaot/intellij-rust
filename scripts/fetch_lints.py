@@ -6,8 +6,8 @@ from urllib import request
 
 import subprocess
 
-from scripts.common import env
-from scripts.updater import UpdaterBase
+from common import env
+from updater import UpdaterBase
 
 """
 This script serves to download actual lints from rustc and clippy.
@@ -16,7 +16,6 @@ You need to have `rustc` and `git` available in $PATH for it to work.
 
 DIR = os.path.dirname(os.path.abspath(__name__))
 LINTS_LIST_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/RustcLints.kt"
-
 
 
 class LintParsingMode:
@@ -76,11 +75,10 @@ def get_clippy_lints():
     return merged_lints
 
 
-
 class LintsUpdater(UpdaterBase):
 
     def _update_locally(self):
-        hadcoded_part = """/*
+        hardcoded_part = """/*
  * Use of this source code is governed by the MIT license that can be
  * found in the LICENSE file.
  */
@@ -96,7 +94,7 @@ val RUSTC_LINTS: List<Lint> = listOf(
             text += "\tLint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
 
         with open(LINTS_LIST_PATH, "w") as f:
-            f.write(hadcoded_part + text + ")")
+            f.write(hardcoded_part + text + ")")
 
 
 def main():
