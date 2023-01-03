@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import re
@@ -5,12 +6,35 @@ from urllib import request
 
 import subprocess
 
+from common import env
+from updater import UpdaterBase
+
 """
 This script serves to download actual lints from rustc and clippy.
 You need to have `rustc` and `git` available in $PATH for it to work.
 """
 
 DIR = os.path.dirname(os.path.abspath(__name__))
+RUSTC_LINTS_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/RustcLints.kt"
+CLIPPY_LINTS_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/ClippyLints.kt"
+HARDCODED_PART_RUSTC = """/*
+ * Use of this source code is governed by the MIT license that can be
+ * found in the LICENSE file.
+ */
+
+package org.rust.lang.core.completion.lint
+
+val RUSTC_LINTS: List<Lint> = listOf(
+"""
+HARDCODED_PART_CLIPPY = """/*
+ * Use of this source code is governed by the MIT license that can be
+ * found in the LICENSE file.
+ */
+
+package org.rust.lang.core.completion.lint
+
+val CLIPPY_LINTS: List<Lint> = listOf(
+"""
 
 
 class LintParsingMode:
@@ -70,8 +94,40 @@ def get_clippy_lints():
     return merged_lints
 
 
-if __name__ == "__main__":
-    output = [{"name": l[0], "group": l[1], "rustc": True} for l in get_rustc_lints()] + \
-             [{"name": l[0], "group": l[1], "rustc": False} for l in get_clippy_lints()]
+class LintsUpdater(UpdaterBase):
 
-    print(json.dumps(output))
+    def _update_locally(self):
+        lints_rustc = get_rustc_lints()
+        lints_rustc.sort(key=lambda item: (not item[1], item[0]))
+
+        text = ""
+        for i in lints_rustc:
+            text += "    Lint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
+
+        with open(RUSTC_LINTS_PATH, "w") as f:
+            f.write(HARDCODED_PART_RUSTC + text + ")")
+
+        lints_clippy = get_clippy_lints()
+        lints_clippy.sort(key=lambda item: (not item[1], item[0]))
+
+        text = ""
+        for i in lints_clippy:
+            text += "    Lint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
+
+        with open(CLIPPY_LINTS_PATH, "w") as f:
+            f.write(HARDCODED_PART_CLIPPY + text + ")")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--token", type=str, required=True, help="github token")
+    args = parser.parse_args()
+
+    repo = env("GITHUB_REPOSITORY")
+
+    updater = LintsUpdater(repo, args.token, branch_name="lints-update", message="Update rustc and clippy lints", assignee="neonaot")
+    updater.update()
+
+
+if __name__ == '__main__':
+    main()
