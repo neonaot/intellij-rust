@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import re
@@ -5,12 +6,17 @@ from urllib import request
 
 import subprocess
 
+from scripts.common import env
+from scripts.updater import UpdaterBase
+
 """
 This script serves to download actual lints from rustc and clippy.
 You need to have `rustc` and `git` available in $PATH for it to work.
 """
 
 DIR = os.path.dirname(os.path.abspath(__name__))
+LINTS_LIST_PATH = "src/main/kotlin/org/rust/lang/core/completion/lint/RustcLints.kt"
+
 
 
 class LintParsingMode:
@@ -70,8 +76,39 @@ def get_clippy_lints():
     return merged_lints
 
 
-if __name__ == "__main__":
-    output = [{"name": l[0], "group": l[1], "rustc": True} for l in get_rustc_lints()] + \
-             [{"name": l[0], "group": l[1], "rustc": False} for l in get_clippy_lints()]
 
-    print(json.dumps(output))
+class LintsUpdater(UpdaterBase):
+
+    def _update_locally(self):
+        hadcoded_part = """/*
+ * Use of this source code is governed by the MIT license that can be
+ * found in the LICENSE file.
+ */
+
+package org.rust.lang.core.completion.lint
+
+val RUSTC_LINTS: List<Lint> = listOf(
+"""  # dont forget ')'
+
+        lints = get_rustc_lints()
+        text = ""
+        for i in lints:
+            text += "\tLint(\"{}\", {}),\n".format(i[0], str(i[1]).lower())
+
+        with open(LINTS_LIST_PATH, "w") as f:
+            f.write(hadcoded_part + text + ")")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--token", type=str, required=True, help="github token")
+    args = parser.parse_args()
+
+    repo = env("GITHUB_REPOSITORY")
+
+    updater = LintsUpdater(repo, args.token, branch_name="rustc-lints", message="Update lints", assignee="neonaot")
+    updater.update()
+
+
+if __name__ == '__main__':
+    main()
