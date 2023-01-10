@@ -28,6 +28,8 @@ jobs:
 
             - name: Prepare for updates
               uses: ./.github/actions/preparations-for-updates
+              with:
+                  toolchain: stable
 
             - name: Update stable
               run: python scripts/update_stable.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
