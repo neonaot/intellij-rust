@@ -27,6 +27,13 @@ jobs:
               if: github.event_name != 'schedule' || fromJSON(steps.check-date.outputs.result).create_release_branch
               run: python scripts/make_release_branch.py
 
-            - name: Create new milestone
+            - name: Install python packages
+              run: pip install -r scripts/requirements.txt
+
+            - name: Send slack message about branch
               if: github.event_name != 'schedule' || fromJSON(steps.check-date.outputs.result).create_release_branch
-              run: python scripts/make_next_milestone.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
+              run: python scripts/send_slack_message.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }} --webhook ${{ secrets.SLACK_WEBHOOK_URL }} --slack_ids ${{ secrets.USERNAMES}}
+
+#            - name: Create new milestone
+#              if: github.event_name != 'schedule' || fromJSON(steps.check-date.outputs.result).create_release_branch
+#              run: python scripts/make_next_milestone.py --token ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
