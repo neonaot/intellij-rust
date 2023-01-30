@@ -83,6 +83,7 @@ val RUSTC_LINTS: List<Lint> = listOf(
     Lint("missing_docs", false),
     Lint("missing_fragment_specifier", false),
     Lint("mixed_script_confusables", false),
+    Lint("multiple_supertrait_upcastable", false),
     Lint("must_not_suspend", false),
     Lint("mutable_transmutes", false),
     Lint("named_arguments_used_positionally", false),
