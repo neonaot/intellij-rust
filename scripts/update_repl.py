@@ -8,7 +8,7 @@ from updater import UpdaterBase
 
 WORKFLOW_PATH = ".github/workflows/check.yml"
 # args: evcxr_repl --locked --version 0.13.0
-REPL_WORKFLOW_RE = re.compile(r'(?<=evcxr_repl --locked --version )(\d+\.\d+\.\d+)')
+REPL_WORKFLOW_RE = re.compile(r'(?<=REPL_VERSION: )(\d+\.\d+\.\d+)')
 
 
 class ReplUpdater(UpdaterBase):
