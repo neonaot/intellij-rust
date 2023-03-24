@@ -11,7 +11,8 @@ from make_next_milestone import RELEASE_MANAGER_RE
 
 
 def send_slack_message(slack_ids, version, webhook):
-    repository = env("GITHUB_REPOSITORY")
+    # repository = env("GITHUB_REPOSITORY")
+    repository = "intellij-rust/intellij-rust"
     milestone = github_connect.get_current_milestone(repo=repository, patch_version=version)
 
     release_version = milestone["title"]
