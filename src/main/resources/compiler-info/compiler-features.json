@@ -310,6 +310,7 @@
   {"name":"repr128","state":"incomplete","since":"1.16.0"},
   {"name":"repr_simd","state":"active","since":"1.4.0"},
   {"name":"return_position_impl_trait_in_trait","state":"incomplete","since":"1.65.0"},
+  {"name":"return_type_notation","state":"incomplete","since":"1.70.0"},
   {"name":"rust_cold_cc","state":"active","since":"1.63.0"},
   {"name":"simd_ffi","state":"active","since":"1.0.0"},
   {"name":"specialization","state":"incomplete","since":"1.7.0"},
