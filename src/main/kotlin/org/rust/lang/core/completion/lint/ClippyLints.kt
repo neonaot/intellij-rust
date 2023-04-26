@@ -535,6 +535,7 @@ val CLIPPY_LINTS: List<Lint> = listOf(
     Lint("swap_ptr_to_ref", false),
     Lint("tabs_in_doc_comments", false),
     Lint("temporary_assignment", false),
+    Lint("tests_outside_test_module", false),
     Lint("to_digit_is_some", false),
     Lint("to_string_in_format_args", false),
     Lint("todo", false),
